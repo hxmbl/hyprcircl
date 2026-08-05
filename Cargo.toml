@@ -1,0 +1,20 @@
+[package]
+name = "radial-menu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gtk4 = { version = "0.11", default-features = false }
+gtk4-layer-shell = "0.8"
+gdk4 = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+signal-hook = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+opt-level = 3
