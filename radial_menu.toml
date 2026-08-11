@@ -4,7 +4,7 @@ ring_thickness = 60.0
 ring_gap = 8.0
 item_gap_degrees = 0.0
 corner_radius = 8.0
-notify_only = true
+notify_only = false
 
 [top_bar]
 enabled = true
@@ -139,97 +139,97 @@ watch = ["/sys/class/power_supply/BAT0/status", "/sys/class/power_supply/BAT0/ca
 # --- Submenu: nested wheels ---
 [[items]]
 label = "Media"
-icon = "🎵"
+icon = "󰝖"
 
   # Level 2: Submenu items inside "Media"
   [[items.items]]
   label = "Play/Pause"
-  icon = "⏯"
+  icon = "󰐊"
   command = ["playerctl", "play-pause"]
 
   [[items.items]]
   label = "Next"
-  icon = "⏭"
+  icon = "󰐙"
   command = ["playerctl", "next"]
 
   [[items.items]]
   label = "Previous"
-  icon = "⏮"
+  icon = "󰐘"
   command = ["playerctl", "previous"]
 
   # Level 3: Deeply nested submenus supported!
   [[items.items]]
   label = "Volume"
-  icon = "🔊"
+  icon = "󰕾"
 
     [[items.items.items]]
     label = "Mute"
-    icon = "🔇"
+    icon = "󰕽"
     command = ["pamixer", "-t"]
 
     [[items.items.items]]
     label = "Up"
-    icon = "➕"
+    icon = "󰙹"
     command = ["pamixer", "-i", "5"]
 
     [[items.items.items]]
     label = "Down"
-    icon = "➖"
+    icon = "󰙼"
     command = ["pamixer", "-d", "5"]
 
 # --- Submenu: more nested wheels ---
 [[items]]
 label = "Apps"
-icon = "🧰"
+icon = "󰏫"
 
   [[items.items]]
   label = "Terminal"
-  icon = "💻"
+  icon = "󰏰"
   command = ["foot"]
 
   [[items.items]]
   label = "Browser"
-  icon = "🌐"
+  icon = "󰫅"
   command = ["firefox"]
 
   [[items.items]]
   label = "Files"
-  icon = "📁"
+  icon = "󰉋"
   command = ["thunar"]
 
 # --- Action: single command, no submenu ---
 [[items]]
 label = "Screenshot"
-icon = "📸"
+icon = "󰌳"
 command = ["grim", "-l", "1"]
 
 # --- Action ---
 [[items]]
 label = "Lock"
-icon = "🔒"
+icon = "󰉢"
 command = ["hyprlock"]
 
 # --- Submenu: system controls ---
 [[items]]
 label = "Power"
-icon = "⚡"
+icon = "󰫒"
 
   [[items.items]]
   label = "Log Out"
-  icon = "🚪"
+  icon = "󰍃"
   command = ["hyprctl", "dispatch", "exit"]
 
   [[items.items]]
   label = "Suspend"
-  icon = "😴"
+  icon = "󰑷"
   command = ["systemctl", "suspend"]
 
   [[items.items]]
   label = "Reboot"
-  icon = "🔄"
+  icon = "󰑐"
   command = ["systemctl", "reboot"]
 
   [[items.items]]
   label = "Shutdown"
-  icon = "⏻"
+  icon = "󰫒"
   command = ["systemctl", "poweroff"]

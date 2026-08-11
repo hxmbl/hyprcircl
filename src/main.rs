@@ -1039,8 +1039,8 @@ fn build_window(app: &Application) {
                 let ty = cy + mid_r * mid_angle.sin();
 
                 cr.set_source_rgba(0.1, 0.1, 0.15, 1.0);
-                cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-                cr.set_font_size(14.0);
+                cr.select_font_face(&cfg.top_bar.font, cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+                cr.set_font_size(16.0);
 
                 let extents = cr.text_extents(&item.icon).unwrap();
                 cr.move_to(
