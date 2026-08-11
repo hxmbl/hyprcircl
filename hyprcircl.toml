@@ -5,6 +5,7 @@ ring_gap = 8.0
 item_gap_degrees = 0.0
 corner_radius = 8.0
 notify_only = false
+show_labels = false
 
 [top_bar]
 enabled = true
@@ -16,9 +17,7 @@ background = [0.15, 0.15, 0.2, 0.9]
 foreground = [0.9, 0.9, 0.95, 1.0]
 font = "JetBrainsMono Nerd Font"
 
-# Waybar-style modules (mirrors ~/.config/waybar/config.jsonc)
-# Push mode: subscribes to the Hyprland event socket — zero polling, instant
-# workspace switches. `interval` is ignored while `stream_command` is set.
+# Push mode: subscribes to the Hyprland event socket
 [[top_bar.modules]]
 stream_command = "S=${HYPRLAND_INSTANCE_SIGNATURE:-$(hyprctl -j instances | jq -r '.[0].instance')}; hyprctl activeworkspace -j | jq -r '.id'; nc -U \"$XDG_RUNTIME_DIR/hypr/$S/.socket2.sock\" | while read -r line; do case \"$line\" in workspace\\>\\>*) echo \"${line#workspace>>}\";; workspacev2\\>\\>*) echo \"${line#workspacev2>>}\" | cut -d, -f1;; focusedmon\\>\\>*) echo \"${line#focusedmon>>}\" | cut -d, -f2;; esac; done"
 interval = 1
@@ -30,75 +29,59 @@ command = "date +'%a %H:%M'"
 interval = 30
 format = "{output}"
 icon = ""
-on_click_right = "omarchy-launch-floating-terminal-with-presentation omarchy-tz-select"
 
 [[top_bar.modules]]
 command = "\"$OMARCHY_PATH/default/waybar/weather.sh\" | jq -r '.text'"
 interval = 60
 format = "{output}"
 icon = ""
-on_click = "notify-send -u low \"$(omarchy-weather-status)\""
 
 [[top_bar.modules]]
 command = "omarchy-update-available"
 interval = 21600
-format = ""
+format = "ICON_UPDATE"
 icon = ""
-on_click = "omarchy-launch-floating-terminal-with-presentation omarchy-update"
 
 [[top_bar.modules]]
 command = "timeout 2 omarchy-voxtype-status | jq -r '.text'"
 interval = 5
 format = "{output}"
 icon = ""
-on_click = "omarchy-voxtype-model"
-on_click_right = "omarchy-voxtype-config"
 
 [[top_bar.modules]]
 command = "\"$OMARCHY_PATH/default/waybar/indicators/screen-recording.sh\" | jq -r '.text'"
 interval = 3
 format = "{output}"
 icon = ""
-on_click = "omarchy-capture-screenrecording"
 
 [[top_bar.modules]]
 command = "\"$OMARCHY_PATH/default/waybar/indicators/idle.sh\" | jq -r '.text'"
 interval = 3
 format = "{output}"
 icon = ""
-on_click = "omarchy-toggle-idle"
 
 [[top_bar.modules]]
 command = "\"$OMARCHY_PATH/default/waybar/indicators/notification-silencing.sh\" | jq -r '.text'"
 interval = 3
 format = "{output}"
 icon = ""
-on_click = "omarchy-toggle-notification-silencing"
 
 [[top_bar.modules]]
 command = "top -bn2 | awk '/^%Cpu/ {last=100-$8} END {printf \"%.0f%%\\n\", last}'"
 interval = 5
-format = "󰍛 {output}"
+format = "󰟛 {output}"
 icon = ""
-on_click = "omarchy-launch-or-focus-tui btop"
-on_click_right = "alacritty"
 
 [[top_bar.modules]]
 command = "nmcli -t -f NAME,DEVICE connection show --active | grep -v '^lo:' | head -1 | cut -d: -f1"
 interval = 3
-format = "󰤨 {output}"
+format = "󰓩 {output}"
 icon = ""
-on_click = "omarchy-launch-wifi"
-# Re-run instantly when the wireless link goes up/down (SSID roaming still
-# lands on the 3s interval fallback).
-watch = ["/sys/class/net/wlan0/operstate"]
 
-# Push mode: subscribes to the PulseAudio/PipeWire daemon events — volume
-# updates the moment it changes, no 1s pamixer polling.
 [[top_bar.modules]]
 stream_command = "v=$(pactl get-sink-volume @DEFAULT_SINK@ | grep -oE '[0-9]+%' | head -1 | tr -d %); m=$(pactl get-sink-mute @DEFAULT_SINK@ | awk '{print $2}'); [ \"$m\" = \"yes\" ] && echo muted || echo ${v}%; pactl subscribe | while read -r e; do case \"$e\" in *sink*) v=$(pactl get-sink-volume @DEFAULT_SINK@ | grep -oE '[0-9]+%' | head -1 | tr -d %); m=$(pactl get-sink-mute @DEFAULT_SINK@ | awk '{print $2}'); [ \"$m\" = \"yes\" ] && echo muted || echo ${v}%;; esac; done"
 interval = 1
-format = " {output}"
+format = "󰕾 {output}"
 icon = ""
 on_click = "omarchy-launch-audio"
 on_click_right = "pamixer -t"
@@ -108,9 +91,8 @@ on_scroll_down = "pamixer -d 5"
 [[top_bar.modules]]
 command = "b=$(cat /sys/class/backlight/acpi_video0/actual_brightness 2>/dev/null); m=$(cat /sys/class/backlight/acpi_video0/max_brightness 2>/dev/null); [ -n \"$m\" ] && [ \"$m\" -gt 0 ] && echo $((b * 100 / m))%"
 interval = 30
-format = "󰃟 {output}"
+format = "󰃞 {output}"
 icon = ""
-# Instant brightness changes with no polling cost.
 watch = ["/sys/class/backlight/acpi_video0/actual_brightness"]
 on_click = "omarchy-brightness-display +5%"
 on_click_right = "omarchy-brightness-display 5%-"
@@ -118,30 +100,26 @@ on_scroll_up = "omarchy-brightness-display +5%"
 on_scroll_down = "omarchy-brightness-display 5%-"
 
 [[top_bar.modules]]
-command = "bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo '' || echo ''"
+command = "bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo '󰍺' || echo ''"
 interval = 30
 format = "{output}"
 icon = ""
 on_click = "omarchy-launch-bluetooth"
 
 [[top_bar.modules]]
-command = "s=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null); c=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null); [ \"$s\" = \"Charging\" ] && echo \"󰂃 $c%\" || echo \"󰁹 $c%\""
+command = "s=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null); c=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null); [ \"$s\" = \"Charging\" ] && echo \"󰪣 $c%\" || echo \"󰩹 $c%\""
 interval = 5
 format = "{output}"
 icon = ""
-on_click = "omarchy-menu power"
-on_click_right = "notify-send -u low \"$(omarchy-battery-status)\""
-# Instant on plug/unplug and capacity changes.
 watch = ["/sys/class/power_supply/BAT0/status", "/sys/class/power_supply/BAT0/capacity"]
 
-# ===================== Level 1: Root Menu Items =====================
+# ===================== Radial Menu Items =====================
 
-# --- Submenu: nested wheels ---
+# --- Media submenu ---
 [[items]]
 label = "Media"
-icon = "󰝖"
+icon = "󰝘"
 
-  # Level 2: Submenu items inside "Media"
   [[items.items]]
   label = "Play/Pause"
   icon = "󰐊"
@@ -157,14 +135,13 @@ icon = "󰝖"
   icon = "󰐘"
   command = ["playerctl", "previous"]
 
-  # Level 3: Deeply nested submenus supported!
   [[items.items]]
   label = "Volume"
-  icon = "󰕾"
+  icon = "󰓦"
 
     [[items.items.items]]
     label = "Mute"
-    icon = "󰕽"
+    icon = "󰓥"
     command = ["pamixer", "-t"]
 
     [[items.items.items]]
@@ -177,19 +154,19 @@ icon = "󰝖"
     icon = "󰙼"
     command = ["pamixer", "-d", "5"]
 
-# --- Submenu: more nested wheels ---
+# --- Apps submenu ---
 [[items]]
 label = "Apps"
-icon = "󰏫"
+icon = "󰏯"
 
   [[items.items]]
   label = "Terminal"
-  icon = "󰏰"
-  command = ["foot"]
+  icon = "󰍰"
+  command = ["ghostty"]
 
   [[items.items]]
   label = "Browser"
-  icon = "󰫅"
+  icon = "󰫥"
   command = ["firefox"]
 
   [[items.items]]
@@ -197,22 +174,142 @@ icon = "󰏫"
   icon = "󰉋"
   command = ["thunar"]
 
-# --- Action: single command, no submenu ---
+  [[items.items]]
+  label = "Settings"
+  icon = "󰒓"
+  command = ["gnome-control-center"]
+
+  [[items.items]]
+  label = "Calculator"
+  icon = "󰌺"
+  command = ["gnome-calculator"]
+
+# --- System submenu ---
+[[items]]
+label = "System"
+icon = "󰒌"
+
+  [[items.items]]
+  label = "Wi-Fi"
+  icon = "󰓩"
+  command = ["omarchy-launch-wifi"]
+
+  [[items.items]]
+  label = "Bluetooth"
+  icon = "󰍺"
+  command = ["omarchy-launch-bluetooth"]
+
+  [[items.items]]
+  label = "Audio"
+  icon = "󰓦"
+  command = ["omarchy-launch-audio"]
+
+  [[items.items]]
+  label = "Display"
+  icon = "󰏞"
+  command = ["omarchy-brightness-display", "+5%"]
+
+  [[items.items]]
+  label = "Task Manager"
+  icon = "󰟛"
+  command = ["omarchy-launch-or-focus-tui", "btop"]
+
+  [[items.items]]
+  label = "Clipboard"
+  icon = "󰛚"
+  command = ["cliphist", "list", "|", "wofi", "--dmenu", "|", "cliphist", "decode", "|", "wl-copy"]
+
+# --- Capture submenu ---
+[[items]]
+label = "Capture"
+icon = "󰓸"
+
+  [[items.items]]
+  label = "Fullscreen"
+  icon = "󰇾"
+  command = ["grim", "-g", "$(slurp)", "-"]
+
+  [[items.items]]
+  label = "Region"
+  icon = "󰇾"
+  command = ["grim", "-g", "$(slurp -d)", "-"]
+
+  [[items.items]]
+  label = "Window"
+  icon = "󰇾"
+  command = ["grim", "-g", "$(hyprctl clients -j | jq -r '.[] | select(.focusHistoryID == -1) | \"\\(.at[0]),\\(.at[1]) \\(.size[0])x\\(.size[1])\"')", "-"]
+
+  [[items.items]]
+  label = "Record"
+  icon = "󰏚"
+  command = ["omarchy-capture-screenrecording"]
+
+  [[items.items]]
+  label = "Color Picker"
+  icon = "󰝎"
+  command = ["hyprpicker", "-a"]
+
+# --- Layout submenu ---
+[[items]]
+label = "Layout"
+icon = "󰖤"
+
+  [[items.items]]
+  label = "Float"
+  icon = "󰓠"
+  command = ["hyprctl", "dispatch", "togglefloating"]
+
+  [[items.items]]
+  label = "Fullscreen"
+  icon = "󰝩"
+  command = ["hyprctl", "dispatch", "fullscreen"]
+
+  [[items.items]]
+  label = "Tile Left"
+  icon = "󰝥"
+  command = ["hyprctl", "dispatch", "masterOrientation", "orientleft"]
+
+  [[items.items]]
+  label = "Tile Right"
+  icon = "󰝦"
+  command = ["hyprctl", "dispatch", "masterOrientation", "orienright"]
+
+  [[items.items]]
+  label = "Pseudo"
+  icon = "󰒧"
+  command = ["hyprctl", "dispatch", "pseudo"]
+
+  [[items.items]]
+  label = "Toggle Split"
+  icon = "󰝪"
+  command = ["hyprctl", "dispatch", "togglesplit"]
+
+  [[items.items]]
+  label = "Move to Group"
+  icon = "󰓳"
+  command = ["hyprctl", "dispatch", "togglegroup"]
+
+  [[items.items]]
+  label = "Kill Window"
+  icon = "󰓢"
+  command = ["hyprctl", "dispatch", "killactive"]
+
+# --- Screenshot (quick action) ---
 [[items]]
 label = "Screenshot"
-icon = "󰌳"
-command = ["grim", "-l", "1"]
+icon = "󰇾"
+command = ["grim", "-g", "$(slurp -d)", "-"]
 
-# --- Action ---
+# --- Lock (quick action) ---
 [[items]]
 label = "Lock"
-icon = "󰉢"
+icon = "󰍂"
 command = ["hyprlock"]
 
-# --- Submenu: system controls ---
+# --- Power submenu ---
 [[items]]
 label = "Power"
-icon = "󰫒"
+icon = "󰔥"
 
   [[items.items]]
   label = "Log Out"
@@ -226,10 +323,10 @@ icon = "󰫒"
 
   [[items.items]]
   label = "Reboot"
-  icon = "󰑐"
+  icon = "󰑄"
   command = ["systemctl", "reboot"]
 
   [[items.items]]
   label = "Shutdown"
-  icon = "󰫒"
+  icon = "󰑂"
   command = ["systemctl", "poweroff"]

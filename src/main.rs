@@ -18,7 +18,51 @@ use gtk4::{
     EventControllerMotion, EventControllerScroll, EventControllerScrollFlags, GestureClick,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use gtk4::glib;
+use gtk4::glib::translate::ToGlibPtr;
+use gtk4::pango;
 use serde::{Deserialize, Serialize};
+
+// pangocairo FFI — symbols are already linked through gtk4
+extern "C" {
+    fn pango_cairo_font_map_get_default() -> *mut std::ffi::c_void;
+    fn pango_font_map_create_context(fontmap: *mut std::ffi::c_void) -> *mut pango::ffi::PangoContext;
+    fn pango_cairo_show_layout(
+        cr: *mut cairo::ffi::cairo_t,
+        layout: *mut pango::ffi::PangoLayout,
+    );
+}
+
+/// Render text onto a Cairo context using Pango (handles Nerd Font glyphs).
+fn pango_show(cr: &cairo::Context, font: &str, size: i32, text: &str) {
+    unsafe {
+        let ctx_ptr = pango_font_map_create_context(pango_cairo_font_map_get_default());
+        let ctx: pango::Context = glib::translate::from_glib_full(ctx_ptr);
+        let layout = pango::Layout::new(&ctx);
+        let mut desc = pango::FontDescription::from_string(font);
+        desc.set_weight(pango::Weight::Bold);
+        desc.set_size(size);
+        layout.set_font_description(Some(&desc));
+        layout.set_text(text);
+        pango_cairo_show_layout(cr.to_raw_none(), layout.to_glib_none().0);
+    }
+}
+
+/// Measure text width using Pango.
+fn pango_measure(font: &str, size: i32, text: &str) -> f64 {
+    unsafe {
+        let ctx_ptr = pango_font_map_create_context(pango_cairo_font_map_get_default());
+        let ctx: pango::Context = glib::translate::from_glib_full(ctx_ptr);
+        let layout = pango::Layout::new(&ctx);
+        let mut desc = pango::FontDescription::from_string(font);
+        desc.set_weight(pango::Weight::Bold);
+        desc.set_size(size);
+        layout.set_font_description(Some(&desc));
+        layout.set_text(text);
+        let (rect, _) = layout.pixel_extents();
+        rect.width() as f64
+    }
+}
 
 // =========================================================================
 // 1. Data Configuration Model
@@ -122,6 +166,9 @@ pub struct RadialConfig {
     /// executing its command (safety mode).
     #[serde(default)]
     pub notify_only: bool,
+    /// When false, text labels are hidden below icons in the radial menu.
+    #[serde(default = "default_true")]
+    pub show_labels: bool,
     pub items: Vec<MenuItem>,
 }
 
@@ -131,6 +178,10 @@ fn default_ring_thickness() -> f64 {
 
 fn default_ring_gap() -> f64 {
     8.0
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for RadialConfig {
@@ -143,6 +194,7 @@ impl Default for RadialConfig {
             item_gap_degrees: 2.0,
             corner_radius: 6.0,
             notify_only: false,
+            show_labels: true,
             top_bar: TopBarConfig {
                 enabled: true,
                 height: 28.0,
@@ -310,11 +362,7 @@ struct BarLayout {
 
 /// Measure a module string's rendered width for the pill font/size.
 fn measure_pill_text(font: &str, text: &str) -> f64 {
-    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1).unwrap();
-    let cr = cairo::Context::new(&surface).unwrap();
-    cr.select_font_face(font, cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-    cr.set_font_size(13.0);
-    cr.text_extents(text).unwrap().width()
+    pango_measure(font, 13 * pango::SCALE, text)
 }
 
 /// Compute pill geometry from the current module outputs. `None` when every
@@ -418,19 +466,13 @@ fn draw_top_bar(cr: &cairo::Context, layout: &BarLayout, cfg: &TopBarConfig) {
     cr.set_source_rgba(bg_r, bg_g, bg_b, bg_a);
     let _ = cr.fill();
 
-    // Module text, centered vertically and laid out left-to-right.
-    cr.select_font_face(&cfg.font, cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-    cr.set_font_size(13.0);
+    // Module text via Pango (handles Nerd Font glyphs correctly).
     let [fg_r, fg_g, fg_b, fg_a] = cfg.foreground;
     cr.set_source_rgba(fg_r, fg_g, fg_b, fg_a);
     let text_y = ry + height / 2.0;
     for (k, t) in layout.texts.iter().enumerate() {
-        let ext = cr.text_extents(t).unwrap();
-        cr.move_to(
-            layout.lefts[k] - ext.x_bearing(),
-            text_y - ext.height() / 2.0 - ext.y_bearing(),
-        );
-        let _ = cr.show_text(t);
+        cr.move_to(layout.lefts[k], text_y);
+        pango_show(cr, &cfg.font, 13 * pango::SCALE, t);
     }
 }
 
@@ -478,7 +520,7 @@ fn kill_process_group(child: &mut std::process::Child) {
 /// Path of the Unix socket used to signal a running instance to toggle.
 fn socket_path() -> std::path::PathBuf {
     let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(dir).join("radial-menu.sock")
+    std::path::PathBuf::from(dir).join("hyprcircl.sock")
 }
 
 /// Toggle: if another instance is already running, tell it to show/hide the
@@ -527,23 +569,23 @@ fn cursor_local_pos() -> Option<(f64, f64)> {
 // =========================================================================
 
 /// Candidate config file locations, in priority order.
-/// The real file is `radial_menu.toml`; `config.toml` is kept as a compat
+/// The real file is `hyprcircl.toml`; `config.toml` is kept as a compat
 /// fallback (e.g. a symlink) since it's too generic a name for a config folder.
 fn config_paths() -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         if !xdg.is_empty() {
-            paths.push(format!("{xdg}/radial-menu/radial_menu.toml"));
-            paths.push(format!("{xdg}/radial-menu/config.toml"));
+            paths.push(format!("{xdg}/hyprcircl/hyprcircl.toml"));
+            paths.push(format!("{xdg}/hyprcircl/config.toml"));
         }
     }
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
-            paths.push(format!("{home}/.config/radial-menu/radial_menu.toml"));
-            paths.push(format!("{home}/.config/radial-menu/config.toml"));
+            paths.push(format!("{home}/.config/hyprcircl/hyprcircl.toml"));
+            paths.push(format!("{home}/.config/hyprcircl/config.toml"));
         }
     }
-    paths.push("radial_menu.toml".into());
+    paths.push("hyprcircl.toml".into());
     paths.push("config.toml".into());
     paths
 }
@@ -571,6 +613,21 @@ fn find_config_path() -> Option<String> {
     config_paths()
         .into_iter()
         .find(|p| std::path::Path::new(p).exists())
+}
+
+/// Find a CSS file in the same directories as the config.
+fn find_css_path() -> Option<String> {
+    let dirs: Vec<String> = config_paths()
+        .into_iter()
+        .filter_map(|p| std::path::Path::new(&p).parent().map(|d| d.to_string_lossy().to_string()))
+        .collect();
+    for dir in dirs {
+        let css = format!("{}/hyprcircl.css", dir);
+        if std::path::Path::new(&css).exists() {
+            return Some(css);
+        }
+    }
+    None
 }
 
 /// Background thread: polls the config file and swaps it into the shared
@@ -682,6 +739,7 @@ fn main() {
 
 fn build_window(app: &Application) {
     let window = ApplicationWindow::builder().application(app).build();
+    window.add_css_class("hyprcircl");
     let config: Arc<RwLock<RadialConfig>> = Arc::new(RwLock::new(load_config()));
 
     // Reload the config automatically when the file changes on disk.
@@ -691,7 +749,7 @@ fn build_window(app: &Application) {
 
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
-    window.set_namespace(Some("radial-menu"));
+    window.set_namespace(Some("hyprcircl"));
     window.set_exclusive_zone(-1);
     window.set_keyboard_mode(KeyboardMode::Exclusive);
     for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
@@ -705,6 +763,20 @@ fn build_window(app: &Application) {
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+
+    // Load user CSS if available (hyprcircl.css in the config directory).
+    if let Some(css_path) = find_css_path() {
+        println!("[CSS] Loading {css_path}");
+        if let Ok(css) = std::fs::read_to_string(&css_path) {
+            let user_provider = CssProvider::new();
+            user_provider.load_from_data(&css);
+            gtk4::style_context_add_provider_for_display(
+                &gdk::Display::default().unwrap(),
+                &user_provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    }
 
     // Stationary menu center, anchored at the cursor (falls back to screen center).
     let (root_x, root_y) = cursor_local_pos().unwrap_or((0.0, 0.0));
@@ -1032,22 +1104,26 @@ fn build_window(app: &Application) {
                 cr.set_line_width(1.5);
                 let _ = cr.stroke();
 
-                // Icon/Label
+                // Icon/Label via Pango (handles Nerd Font glyphs)
                 let mid_angle = (a1 + a2) / 2.0;
                 let mid_r = (r_in + r_out) / 2.0;
                 let tx = cx + mid_r * mid_angle.cos();
                 let ty = cy + mid_r * mid_angle.sin();
 
-                cr.set_source_rgba(0.1, 0.1, 0.15, 1.0);
-                cr.select_font_face(&cfg.top_bar.font, cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-                cr.set_font_size(16.0);
+                cr.set_source_rgba(0.05, 0.05, 0.1, 1.0);
 
-                let extents = cr.text_extents(&item.icon).unwrap();
-                cr.move_to(
-                    tx - (extents.width() / 2.0 + extents.x_bearing()),
-                    ty - (extents.height() / 2.0 + extents.y_bearing()),
-                );
-                let _ = cr.show_text(&item.icon);
+                // Center icon in wedge
+                let icon_w = pango_measure(&cfg.top_bar.font, 20 * pango::SCALE, &item.icon);
+                cr.move_to(tx - icon_w / 2.0, ty - 12.0);
+                pango_show(cr, &cfg.top_bar.font, 20 * pango::SCALE, &item.icon);
+
+                // Label below icon (smaller to avoid overflow)
+                if cfg.show_labels {
+                    cr.set_source_rgba(0.15, 0.15, 0.2, 0.85);
+                    let label_w = pango_measure(&cfg.top_bar.font, 8 * pango::SCALE, &item.label);
+                    cr.move_to(tx - label_w / 2.0, ty + 10.0);
+                    pango_show(cr, &cfg.top_bar.font, 8 * pango::SCALE, &item.label);
+                }
             }
 
             // Descend to the open child level for the next iteration.
@@ -1217,7 +1293,7 @@ fn build_window(app: &Application) {
                     drop(cfg);
                     if notify_only {
                         let _ = Command::new("notify-send")
-                            .args(["-a", "radial-menu", &label, &command.join(" ")])
+                            .args(["-a", "hyprcircl", &label, &command.join(" ")])
                             .spawn();
                     } else if !command.is_empty() {
                         let _ = Command::new(&command[0]).args(&command[1..]).spawn();
