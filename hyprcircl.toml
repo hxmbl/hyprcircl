@@ -69,13 +69,13 @@ icon = ""
 [[top_bar.modules]]
 command = "top -bn2 | awk '/^%Cpu/ {last=100-$8} END {printf \"%.0f%%\\n\", last}'"
 interval = 5
-format = "󰟛 {output}"
+format = "󰊚 {output}"
 icon = ""
 
 [[top_bar.modules]]
 command = "nmcli -t -f NAME,DEVICE connection show --active | grep -v '^lo:' | head -1 | cut -d: -f1"
 interval = 3
-format = "󰓩 {output}"
+format = "󰖩 {output}"
 icon = ""
 
 [[top_bar.modules]]
@@ -100,7 +100,7 @@ on_scroll_up = "omarchy-brightness-display +5%"
 on_scroll_down = "omarchy-brightness-display 5%-"
 
 [[top_bar.modules]]
-command = "bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo '󰍺' || echo ''"
+command = "bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo '󰂯' || echo ''"
 interval = 30
 format = "{output}"
 icon = ""
@@ -118,7 +118,7 @@ watch = ["/sys/class/power_supply/BAT0/status", "/sys/class/power_supply/BAT0/ca
 # --- Media submenu ---
 [[items]]
 label = "Media"
-icon = "󰝘"
+icon = "󰝚"
 
   [[items.items]]
   label = "Play/Pause"
@@ -127,46 +127,46 @@ icon = "󰝘"
 
   [[items.items]]
   label = "Next"
-  icon = "󰐙"
+  icon = "󰒭"
   command = ["playerctl", "next"]
 
   [[items.items]]
   label = "Previous"
-  icon = "󰐘"
+  icon = "󰒮"
   command = ["playerctl", "previous"]
 
   [[items.items]]
   label = "Volume"
-  icon = "󰓦"
+  icon = "󰕾"
 
     [[items.items.items]]
     label = "Mute"
-    icon = "󰓥"
+    icon = "󰖁"
     command = ["pamixer", "-t"]
 
     [[items.items.items]]
     label = "Up"
-    icon = "󰙹"
+    icon = "󰝝"
     command = ["pamixer", "-i", "5"]
 
     [[items.items.items]]
     label = "Down"
-    icon = "󰙼"
+    icon = "󰕿"
     command = ["pamixer", "-d", "5"]
 
 # --- Apps submenu ---
 [[items]]
 label = "Apps"
-icon = "󰏯"
+icon = "󰀻"
 
   [[items.items]]
   label = "Terminal"
-  icon = "󰍰"
+  icon = "󰆍"
   command = ["ghostty"]
 
   [[items.items]]
   label = "Browser"
-  icon = "󰫥"
+  icon = "󰖟"
   command = ["firefox"]
 
   [[items.items]]
@@ -181,97 +181,102 @@ icon = "󰏯"
 
   [[items.items]]
   label = "Calculator"
-  icon = "󰌺"
+  icon = "󰃬"
   command = ["gnome-calculator"]
 
 # --- System submenu ---
 [[items]]
 label = "System"
-icon = "󰒌"
+icon = "󰌢"
 
   [[items.items]]
   label = "Wi-Fi"
-  icon = "󰓩"
+  icon = "󰖩"
   command = ["omarchy-launch-wifi"]
 
   [[items.items]]
   label = "Bluetooth"
-  icon = "󰍺"
+  icon = "󰂯"
   command = ["omarchy-launch-bluetooth"]
 
   [[items.items]]
   label = "Audio"
-  icon = "󰓦"
+  icon = "󰕾"
   command = ["omarchy-launch-audio"]
 
   [[items.items]]
   label = "Display"
-  icon = "󰏞"
+  icon = "󰍹"
   command = ["omarchy-brightness-display", "+5%"]
 
   [[items.items]]
   label = "Task Manager"
-  icon = "󰟛"
+  icon = "󰊚"
   command = ["omarchy-launch-or-focus-tui", "btop"]
 
   [[items.items]]
   label = "Clipboard"
-  icon = "󰛚"
+  icon = "󰅇"
   command = ["cliphist", "list", "|", "wofi", "--dmenu", "|", "cliphist", "decode", "|", "wl-copy"]
 
 # --- Capture submenu ---
 [[items]]
 label = "Capture"
-icon = "󰓸"
+icon = "󰄀"
 
   [[items.items]]
   label = "Fullscreen"
-  icon = "󰇾"
+  icon = "󰹑"
   command = ["grim", "-g", "$(slurp)", "-"]
 
   [[items.items]]
   label = "Region"
-  icon = "󰇾"
+  icon = "󰹑"
   command = ["grim", "-g", "$(slurp -d)", "-"]
 
   [[items.items]]
   label = "Window"
-  icon = "󰇾"
+  icon = "󰹑"
   command = ["grim", "-g", "$(hyprctl clients -j | jq -r '.[] | select(.focusHistoryID == -1) | \"\\(.at[0]),\\(.at[1]) \\(.size[0])x\\(.size[1])\"')", "-"]
 
   [[items.items]]
+  label = "Screenshot"
+  icon = "󰄀"
+  command = ["grim", "-g", "$(slurp -d)", "-"]
+
+  [[items.items]]
   label = "Record"
-  icon = "󰏚"
+  icon = "󰑊"
   command = ["omarchy-capture-screenrecording"]
 
   [[items.items]]
   label = "Color Picker"
-  icon = "󰝎"
+  icon = "󰈊"
   command = ["hyprpicker", "-a"]
 
 # --- Layout submenu ---
 [[items]]
 label = "Layout"
-icon = "󰖤"
+icon = "󰕮"
 
   [[items.items]]
   label = "Float"
-  icon = "󰓠"
+  icon = "󰇛"
   command = ["hyprctl", "dispatch", "togglefloating"]
 
   [[items.items]]
   label = "Fullscreen"
-  icon = "󰝩"
+  icon = "󰊓"
   command = ["hyprctl", "dispatch", "fullscreen"]
 
   [[items.items]]
   label = "Tile Left"
-  icon = "󰝥"
+  icon = "󰯋"
   command = ["hyprctl", "dispatch", "masterOrientation", "orientleft"]
 
   [[items.items]]
   label = "Tile Right"
-  icon = "󰝦"
+  icon = "󰯌"
   command = ["hyprctl", "dispatch", "masterOrientation", "orienright"]
 
   [[items.items]]
@@ -281,35 +286,29 @@ icon = "󰖤"
 
   [[items.items]]
   label = "Toggle Split"
-  icon = "󰝪"
+  icon = "󰃻"
   command = ["hyprctl", "dispatch", "togglesplit"]
 
   [[items.items]]
   label = "Move to Group"
-  icon = "󰓳"
+  icon = "󰏓"
   command = ["hyprctl", "dispatch", "togglegroup"]
 
   [[items.items]]
   label = "Kill Window"
-  icon = "󰓢"
+  icon = "󰅖"
   command = ["hyprctl", "dispatch", "killactive"]
-
-# --- Screenshot (quick action) ---
-[[items]]
-label = "Screenshot"
-icon = "󰇾"
-command = ["grim", "-g", "$(slurp -d)", "-"]
 
 # --- Lock (quick action) ---
 [[items]]
 label = "Lock"
-icon = "󰍂"
+icon = "󰌾"
 command = ["hyprlock"]
 
 # --- Power submenu ---
 [[items]]
 label = "Power"
-icon = "󰔥"
+icon = "󰐥"
 
   [[items.items]]
   label = "Log Out"
@@ -318,15 +317,15 @@ icon = "󰔥"
 
   [[items.items]]
   label = "Suspend"
-  icon = "󰑷"
+  icon = "󰒲"
   command = ["systemctl", "suspend"]
 
   [[items.items]]
   label = "Reboot"
-  icon = "󰑄"
+  icon = "󰜉"
   command = ["systemctl", "reboot"]
 
   [[items.items]]
   label = "Shutdown"
-  icon = "󰑂"
+  icon = "󰤂"
   command = ["systemctl", "poweroff"]
