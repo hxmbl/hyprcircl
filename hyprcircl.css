@@ -1,0 +1,79 @@
+/* =========================================================================
+   hyprcircl theme — copy this file to ~/.config/hyprcircl/hyprcircl.css
+   (or next to wherever hyprcircl.toml lives) and edit freely. Changes apply
+   live without restarting the daemon.
+
+   Colors accept hex (#rgb, #rgba, #rrggbb, #rrggbbaa), rgb()/rgba(),
+   hsl()/hsla(), or CSS color names. Sizes accept plain numbers, px, or pt.
+   ========================================================================= */
+
+/* --- Radial menu items ------------------------------------------------ */
+
+/* Default wedge fill. `border-radius` on .item rounds the wedge corners. */
+.item {
+    background-color: rgba(0.85, 0.85, 0.88, 0.90);
+    border-radius: 8px;
+}
+
+/* Wedge under the pointer (on the currently active ring). */
+.item:hover {
+    background-color: rgba(0.48, 0.63, 0.96, 0.95);
+}
+
+/* The ring that is currently open (non-hovered wedges). */
+.item:active {
+    background-color: rgba(0.85, 0.85, 0.88, 0.90);
+}
+
+/* The parent wedge leading into an open submenu. */
+.item:selected {
+    background-color: rgba(0.88, 0.29, 0.29, 0.95);
+}
+
+/* Wedge outline. */
+.item-stroke {
+    border-color: rgba(0.7, 0.7, 0.75, 1.0);
+    border-width: 1.5px;
+}
+
+/* --- Item text -------------------------------------------------------- */
+
+/* Nerd Font glyph in the middle of each wedge. */
+.icon {
+    color: rgba(0.05, 0.05, 0.1, 1.0);
+    font-size: 20px;
+    font-family: "JetBrainsMono Nerd Font";
+    font-weight: 700;
+}
+
+/* Text label under the icon. `display: none;` hides labels. */
+.label {
+    color: rgba(0.15, 0.15, 0.2, 0.85);
+    font-size: 8px;
+    font-family: "JetBrainsMono Nerd Font";
+    font-weight: 700;
+}
+
+/* --- Top pill (Waybar-style bar above the menu) ----------------------- */
+
+/*
+   background-color  pill backdrop
+   color             module text
+   height            pill height
+   padding           horizontal padding (the gap around the pill edge)
+   margin-top        distance between the menu ring and the pill
+   border-radius     pill corner rounding
+   --module-gap      horizontal spacing between modules
+*/
+.pill {
+    background-color: rgba(0.15, 0.15, 0.2, 0.9);
+    color: rgba(0.9, 0.9, 0.95, 1.0);
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 13px;
+    font-weight: 700;
+    height: 28px;
+    padding: 14px;
+    margin-top: 24px;
+    border-radius: 14px;
+    --module-gap: 18px;
+}
