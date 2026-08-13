@@ -7,7 +7,10 @@ use crate::window;
 
 #[cfg(target_os = "linux")]
 fn run(cmd: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(cmd[0]).args(&cmd[1..]).output().ok()?;
+    let out = std::process::Command::new(cmd[0])
+        .args(&cmd[1..])
+        .output()
+        .ok()?;
     if out.status.success() {
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -35,7 +38,10 @@ pub fn cursor_local_pos() -> Option<(f64, f64)> {
     if which("hyprctl") {
         if let Some(res) = run(&["hyprctl", "-j", "cursorpos"]) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&res) {
-                if let (Some(x), Some(y)) = (v.get("x").and_then(|n| n.as_f64()), v.get("y").and_then(|n| n.as_f64())) {
+                if let (Some(x), Some(y)) = (
+                    v.get("x").and_then(|n| n.as_f64()),
+                    v.get("y").and_then(|n| n.as_f64()),
+                ) {
                     if let Some(m_res) = run(&["hyprctl", "-j", "monitors"]) {
                         if let Ok(mv) = serde_json::from_str::<serde_json::Value>(&m_res) {
                             if let Some(mons) = mv.as_array() {
