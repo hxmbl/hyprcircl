@@ -17,7 +17,10 @@ use gtk4::{
     Application, ApplicationWindow, CssProvider, DrawingArea, EventControllerKey,
     EventControllerMotion, EventControllerScroll, EventControllerScrollFlags, GestureClick,
 };
+#[cfg(target_os = "linux")]
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+
+mod window;
 use gtk4::glib;
 use gtk4::glib::translate::ToGlibPtr;
 use gtk4::pango;
@@ -747,14 +750,7 @@ fn build_window(app: &Application) {
         watch_config(path, config.clone());
     }
 
-    window.init_layer_shell();
-    window.set_layer(Layer::Overlay);
-    window.set_namespace(Some("hyprcircl"));
-    window.set_exclusive_zone(-1);
-    window.set_keyboard_mode(KeyboardMode::Exclusive);
-    for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-        window.set_anchor(edge, true);
-    }
+    window::init_overlay(&window);
 
     let provider = CssProvider::new();
     provider.load_from_data("window { background-color: transparent; }");
@@ -1521,7 +1517,7 @@ fn build_window(app: &Application) {
                         parent_mid_angle: 0.0,
                     }];
                     *hover_t.write().unwrap() = None;
-                    win_t.set_keyboard_mode(KeyboardMode::Exclusive);
+                    window::set_keyboard_exclusive(&win_t, true);
                     canvas_t.queue_draw();
                     win_t.present();
                 }
