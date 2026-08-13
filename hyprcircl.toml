@@ -3,19 +3,14 @@ outer_radius = 100.0
 ring_thickness = 60.0
 ring_gap = 8.0
 item_gap_degrees = 0.0
-corner_radius = 8.0
 notify_only = false
 show_labels = false
 
+# Visual styling (colors, fonts, geometry) is no longer config here — it moved
+# to a `hyprcircl.css` file next to this config. See hyprcircl.css in the repo
+# root for the reference theme (copy it to ~/.config/hyprcircl/ to customize).
 [top_bar]
 enabled = true
-height = 28.0
-padding_x = 14.0
-offset_y = 24.0
-corner_radius = 14.0
-background = [0.15, 0.15, 0.2, 0.9]
-foreground = [0.9, 0.9, 0.95, 1.0]
-font = "JetBrainsMono Nerd Font"
 
 # Push mode: subscribes to the Hyprland event socket
 [[top_bar.modules]]

@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use gdk4::Key;
-use gtk4::glib::{ControlFlow, Propagation, timeout_add_local};
 use gtk4::gdk;
+use gtk4::glib::{timeout_add_local, ControlFlow, Propagation};
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
@@ -22,20 +22,44 @@ mod cursor;
 mod draw;
 mod nav;
 mod process;
+mod theme;
 mod window;
 
 use crate::config::{find_config_path, find_css_path, load_config, watch_config, RadialConfig};
 use crate::cursor::cursor_local_pos;
 use crate::draw::{
-    draw_rounded_sector, draw_top_bar, hit_test_pill, pango_measure, pango_show, top_bar_layout,
+    draw_rounded_sector, draw_top_bar, hit_test_pill, pango_measure, pango_show, pango_weight,
+    top_bar_layout,
 };
 use crate::nav::{get_item_angles, hit_test_index, LevelSelection};
 use crate::process::{kill_process_group, run_shell};
+use crate::theme::{watch_theme, Theme};
 
 /// Path of the Unix socket used to signal a running instance to toggle.
 fn socket_path() -> std::path::PathBuf {
     let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
     std::path::PathBuf::from(dir).join("hyprcircl.sock")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_path_uses_runtime_dir_or_tmp() {
+        // Falls back to /tmp when XDG_RUNTIME_DIR is unset.
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        let p = socket_path();
+        assert_eq!(p.file_name().unwrap(), "hyprcircl.sock");
+        assert!(p.starts_with("/tmp") || p.starts_with("/run") || p.starts_with("/var"));
+
+        // Honours XDG_RUNTIME_DIR when present.
+        std::env::set_var("XDG_RUNTIME_DIR", "/tmp/xdg");
+        let p = socket_path();
+        assert!(p.starts_with("/tmp/xdg"));
+        assert_eq!(p.file_name().unwrap(), "hyprcircl.sock");
+        std::env::remove_var("XDG_RUNTIME_DIR");
+    }
 }
 
 /// Toggle: if another instance is already running, tell it to show/hide the
@@ -113,10 +137,13 @@ fn build_window(app: &Application) {
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    // Load user CSS if available (hyprcircl.css in the config directory).
+    // Shared theme: every visual property of the Cairo-drawn menu, seeded by
+    // `hyprcircl.css` in the config directory. Live-reloads on file changes.
+    let theme: Arc<RwLock<Theme>> = Arc::new(RwLock::new(Theme::default()));
     if let Some(css_path) = find_css_path() {
         println!("[CSS] Loading {css_path}");
         if let Ok(css) = std::fs::read_to_string(&css_path) {
+            // Window/widget-level rules go through GTK's own CSS engine.
             let user_provider = CssProvider::new();
             user_provider.load_from_data(&css);
             gtk4::style_context_add_provider_for_display(
@@ -124,7 +151,11 @@ fn build_window(app: &Application) {
                 &user_provider,
                 gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
             );
+            // The rest of the file (`.item`, `.pill`, `.icon`, ...) drives our
+            // Cairo drawing via the typed Theme.
+            *theme.write().unwrap() = Theme::from_css(&css);
         }
+        watch_theme(css_path, theme.clone());
     }
 
     // Stationary menu center, anchored at the cursor (falls back to screen center).
@@ -385,11 +416,16 @@ fn build_window(app: &Application) {
     let config_draw = config.clone();
     let bar_state_draw = bar_state.clone();
     let center_draw = center_pos.clone();
+    let theme_draw = theme.clone();
 
     // Render Function
     canvas.set_draw_func(move |_, cr, width, height| {
         let cfg = match config_draw.read() {
             Ok(c) => c,
+            Err(_) => return,
+        };
+        let theme = match theme_draw.read() {
+            Ok(t) => t,
             Err(_) => return,
         };
 
@@ -409,8 +445,10 @@ fn build_window(app: &Application) {
         // Renders only at the root menu (nav stack depth == 1).
         if cfg.top_bar.enabled && stack.len() == 1 {
             let outputs = bar_state_draw.lock().map(|s| s.clone()).unwrap_or_default();
-            if let Some(layout) = top_bar_layout(&cfg.top_bar, cfg.outer_radius, &outputs, cx, cy) {
-                draw_top_bar(cr, &layout, &cfg.top_bar);
+            if let Some(layout) =
+                top_bar_layout(&cfg.top_bar, &theme, cfg.outer_radius, &outputs, cx, cy)
+            {
+                draw_top_bar(cr, &layout, &theme);
             }
         }
 
@@ -433,24 +471,28 @@ fn build_window(app: &Application) {
             for (i, item) in current_items.iter().enumerate() {
                 let (a1, a2) = get_item_angles(level, i, count, parent_angle, gap_rad);
 
-                draw_rounded_sector(cr, cx, cy, r_in, r_out, a1, a2, cfg.corner_radius);
+                draw_rounded_sector(cr, cx, cy, r_in, r_out, a1, a2, theme.item_corner);
 
                 // --- COLOR SELECTION ---
-                if selected_child == Some(i) {
-                    // Parent branch slice leading to an open submenu -> RED
-                    cr.set_source_rgba(0.88, 0.29, 0.29, 0.95);
+                // Parent branch slice leading to an open submenu -> selected;
+                // hovered slice of the active ring -> hover; the active ring
+                // itself -> active; everything else -> default.
+                let color = if selected_child == Some(i) {
+                    theme.item_selected
                 } else if is_active_level && *h_idx.read().unwrap() == Some(i) {
-                    // Current active menu hovered slice -> Accent Blue
-                    cr.set_source_rgba(0.48, 0.63, 0.96, 0.95);
+                    theme.item_hover
+                } else if is_active_level {
+                    theme.item_active
                 } else {
-                    // Default Idle Gray
-                    cr.set_source_rgba(0.85, 0.85, 0.88, 0.90);
-                }
+                    theme.item_default
+                };
+                cr.set_source_rgba(color.0, color.1, color.2, color.3);
                 let _ = cr.fill_preserve();
 
                 // Stroke
-                cr.set_source_rgba(0.7, 0.7, 0.75, 1.0);
-                cr.set_line_width(1.5);
+                let stroke = theme.item_stroke;
+                cr.set_source_rgba(stroke.0, stroke.1, stroke.2, stroke.3);
+                cr.set_line_width(theme.item_stroke_width);
                 let _ = cr.stroke();
 
                 // Icon/Label via Pango (handles Nerd Font glyphs)
@@ -459,19 +501,27 @@ fn build_window(app: &Application) {
                 let tx = cx + mid_r * mid_angle.cos();
                 let ty = cy + mid_r * mid_angle.sin();
 
-                cr.set_source_rgba(0.05, 0.05, 0.1, 1.0);
+                let icon_c = theme.icon_color;
+                cr.set_source_rgba(icon_c.0, icon_c.1, icon_c.2, icon_c.3);
 
                 // Center icon in wedge
-                let icon_w = pango_measure(&cfg.top_bar.font, 20 * pango::SCALE, &item.icon);
+                let icon_size = (theme.icon_font_size * pango::SCALE as f64) as i32;
+                let icon_weight = pango_weight(theme.icon_font_weight);
+                let icon_w = pango_measure(&theme.icon_font, icon_size, icon_weight, &item.icon);
                 cr.move_to(tx - icon_w / 2.0, ty - 12.0);
-                pango_show(cr, &cfg.top_bar.font, 20 * pango::SCALE, &item.icon);
+                pango_show(cr, &theme.icon_font, icon_size, icon_weight, &item.icon);
 
-                // Label below icon (smaller to avoid overflow)
-                if cfg.show_labels {
-                    cr.set_source_rgba(0.15, 0.15, 0.2, 0.85);
-                    let label_w = pango_measure(&cfg.top_bar.font, 8 * pango::SCALE, &item.label);
+                // Label below icon (smaller to avoid overflow).
+                // Hidden when TOML `show_labels` is off OR CSS sets `.label { display: none; }`.
+                if cfg.show_labels && theme.label_visible {
+                    let label_c = theme.label_color;
+                    cr.set_source_rgba(label_c.0, label_c.1, label_c.2, label_c.3);
+                    let label_size = (theme.label_font_size * pango::SCALE as f64) as i32;
+                    let label_weight = pango_weight(theme.label_font_weight);
+                    let label_w =
+                        pango_measure(&theme.label_font, label_size, label_weight, &item.label);
                     cr.move_to(tx - label_w / 2.0, ty + 10.0);
-                    pango_show(cr, &cfg.top_bar.font, 8 * pango::SCALE, &item.label);
+                    pango_show(cr, &theme.label_font, label_size, label_weight, &item.label);
                 }
             }
 
@@ -536,7 +586,13 @@ fn build_window(app: &Application) {
         let new_hover = if dist >= r_in && dist <= r_out {
             let gap_rad = cfg.item_gap_degrees.to_radians();
             let parent_angle = stack[current_level].parent_mid_angle;
-            hit_test_index(current_level, dy.atan2(dx), items.len(), parent_angle, gap_rad)
+            hit_test_index(
+                current_level,
+                dy.atan2(dx),
+                items.len(),
+                parent_angle,
+                gap_rad,
+            )
         } else {
             None
         };
@@ -559,10 +615,15 @@ fn build_window(app: &Application) {
     let center_c = center_pos.clone();
     let shown_c = shown.clone();
     let bar_state_c = bar_state.clone();
+    let theme_c = theme.clone();
 
     click.connect_pressed(move |_, _, mx, my| {
         let cfg = match cfg_c.read() {
             Ok(c) => c,
+            Err(_) => return,
+        };
+        let theme = match theme_c.read() {
+            Ok(t) => t,
             Err(_) => return,
         };
 
@@ -574,7 +635,8 @@ fn build_window(app: &Application) {
         if is_root && cfg.top_bar.enabled {
             let outputs = bar_state_c.lock().map(|s| s.clone()).unwrap_or_default();
             let (cx, cy) = *center_c.read().unwrap();
-            if let Some(layout) = top_bar_layout(&cfg.top_bar, cfg.outer_radius, &outputs, cx, cy)
+            if let Some(layout) =
+                top_bar_layout(&cfg.top_bar, &theme, cfg.outer_radius, &outputs, cx, cy)
             {
                 if let Some(idx) = hit_test_pill(&layout, mx, my) {
                     let cmd = cfg.top_bar.modules[idx].on_click.clone();
@@ -614,9 +676,13 @@ fn build_window(app: &Application) {
             let gap_rad = cfg.item_gap_degrees.to_radians();
             let parent_angle = stack[current_level].parent_mid_angle;
 
-            if let Some(idx) =
-                hit_test_index(current_level, dy.atan2(dx), items.len(), parent_angle, gap_rad)
-            {
+            if let Some(idx) = hit_test_index(
+                current_level,
+                dy.atan2(dx),
+                items.len(),
+                parent_angle,
+                gap_rad,
+            ) {
                 let clicked = &items[idx];
 
                 if clicked.is_submenu() {
@@ -631,7 +697,7 @@ fn build_window(app: &Application) {
                         parent_mid_angle: mid_angle,
                     });
 
-                     *h_c.write().unwrap() = None;
+                    *h_c.write().unwrap() = None;
                     cv_c.queue_draw();
                 } else {
                     // ACTION: either notify (safety mode) or execute the real command.
@@ -658,7 +724,7 @@ fn build_window(app: &Application) {
                 if let Some(parent) = stack.last_mut() {
                     parent.selected_child_index = None;
                 }
-                 *h_c.write().unwrap() = None;
+                *h_c.write().unwrap() = None;
                 cv_c.queue_draw();
             } else {
                 drop(stack);
@@ -681,10 +747,15 @@ fn build_window(app: &Application) {
     let cfg_r = config.clone();
     let center_r = center_pos.clone();
     let bar_state_r = bar_state.clone();
+    let theme_r = theme.clone();
 
     rclick.connect_pressed(move |_, _, mx, my| {
         let cfg = match cfg_r.read() {
             Ok(c) => c,
+            Err(_) => return,
+        };
+        let theme = match theme_r.read() {
+            Ok(t) => t,
             Err(_) => return,
         };
 
@@ -693,7 +764,8 @@ fn build_window(app: &Application) {
         if is_root && cfg.top_bar.enabled {
             let outputs = bar_state_r.lock().map(|s| s.clone()).unwrap_or_default();
             let (cx, cy) = *center_r.read().unwrap();
-            if let Some(layout) = top_bar_layout(&cfg.top_bar, cfg.outer_radius, &outputs, cx, cy)
+            if let Some(layout) =
+                top_bar_layout(&cfg.top_bar, &theme, cfg.outer_radius, &outputs, cx, cy)
             {
                 if let Some(idx) = hit_test_pill(&layout, mx, my) {
                     let cmd = cfg.top_bar.modules[idx].on_click_right.clone();
@@ -713,7 +785,7 @@ fn build_window(app: &Application) {
             if let Some(parent) = stack.last_mut() {
                 parent.selected_child_index = None;
             }
-             *h_r.write().unwrap() = None;
+            *h_r.write().unwrap() = None;
             cv_r.queue_draw();
         } else {
             drop(stack);
@@ -773,6 +845,7 @@ fn build_window(app: &Application) {
     let nav_s = nav_stack.clone();
     let center_s = center_pos.clone();
     let bar_state_s = bar_state.clone();
+    let theme_s = theme.clone();
     scroll.connect_scroll(move |_, _dx, dy| {
         // If the pointer is over a pill module with scroll handlers, dispatch
         // those instead of switching workspaces (Waybar `on-scroll-*`).
@@ -781,11 +854,16 @@ fn build_window(app: &Application) {
             Ok(c) => c,
             Err(_) => return Propagation::Proceed,
         };
+        let theme = match theme_s.read() {
+            Ok(t) => t,
+            Err(_) => return Propagation::Proceed,
+        };
         let is_root = nav_s.read().map(|s| s.len() == 1).unwrap_or(false);
         if is_root && cfg.top_bar.enabled {
             let outputs = bar_state_s.lock().map(|s| s.clone()).unwrap_or_default();
             let (cx, cy) = *center_s.read().unwrap();
-            if let Some(layout) = top_bar_layout(&cfg.top_bar, cfg.outer_radius, &outputs, cx, cy)
+            if let Some(layout) =
+                top_bar_layout(&cfg.top_bar, &theme, cfg.outer_radius, &outputs, cx, cy)
             {
                 if let Some(idx) = hit_test_pill(&layout, pos.0, pos.1) {
                     let cmd = if dy > 0.0 {

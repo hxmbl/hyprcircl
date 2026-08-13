@@ -1,5 +1,6 @@
 #![allow(deprecated)] // cocoa crate is deprecated in favour of objc2; keep it for now
 
+#[cfg(target_os = "macos")]
 use gtk4::prelude::GtkWindowExt;
 use gtk4::ApplicationWindow;
 
@@ -15,9 +16,8 @@ use gtk4::ApplicationWindow;
 // gdk-4.0 is already linked by the `gdk4` crate, so no `#[link]` is needed.
 #[cfg(target_os = "macos")]
 extern "C" {
-    fn gdk_macos_surface_get_native_window(
-        surface: *mut std::ffi::c_void,
-    ) -> *mut std::ffi::c_void;
+    fn gdk_macos_surface_get_native_window(surface: *mut std::ffi::c_void)
+        -> *mut std::ffi::c_void;
 }
 
 #[cfg(target_os = "linux")]
@@ -101,10 +101,7 @@ fn apply_macos_overlay(window: &ApplicationWindow) -> bool {
 /// to the given Quartz display bounds if provided.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
-unsafe fn configure_ns_window(
-    ns_window: cocoa::base::id,
-    bounds: Option<(f64, f64, f64, f64)>,
-) {
+unsafe fn configure_ns_window(ns_window: cocoa::base::id, bounds: Option<(f64, f64, f64, f64)>) {
     use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
     use cocoa::base::{NO, YES};
 
@@ -145,11 +142,11 @@ fn quartz_to_appkit_frame(bounds: (f64, f64, f64, f64)) -> cocoa::foundation::NS
     use cocoa::foundation::{NSPoint, NSRect, NSSize};
 
     let (x, y, w, h) = bounds;
-    let primary_h = core_graphics::display::CGDisplay::main().bounds().size.height;
-    NSRect::new(
-        NSPoint::new(x, primary_h - (y + h)),
-        NSSize::new(w, h),
-    )
+    let primary_h = core_graphics::display::CGDisplay::main()
+        .bounds()
+        .size
+        .height;
+    NSRect::new(NSPoint::new(x, primary_h - (y + h)), NSSize::new(w, h))
 }
 
 #[cfg(target_os = "macos")]
@@ -241,7 +238,10 @@ pub fn macos_canvas_center_under_cursor(window: &ApplicationWindow) -> Option<(f
         use cocoa::appkit::NSWindow;
         let frame = NSWindow::frame(ns_window);
         // Window content top-left in Quartz (top-left origin, y-down).
-        let primary_h = core_graphics::display::CGDisplay::main().bounds().size.height;
+        let primary_h = core_graphics::display::CGDisplay::main()
+            .bounds()
+            .size
+            .height;
         let canvas_top_quartz = primary_h - (frame.origin.y + frame.size.height);
         Some((cx - frame.origin.x, cy - canvas_top_quartz))
     }
@@ -266,3 +266,51 @@ pub fn set_keyboard_exclusive(_window: &ApplicationWindow, _exclusive: bool) {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn set_keyboard_exclusive(_window: &ApplicationWindow, _exclusive: bool) {}
+
+// =========================================================================
+// Unit tests (macOS-only: the functions under test are macOS-gated)
+// =========================================================================
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quartz_to_appkit_frame_flips_vertically() {
+        // Quartz bounds: top-left origin, y-down. Convert to AppKit (bottom-left,
+        // y-up) using a known primary display height.
+        let primary_h = core_graphics::display::CGDisplay::main()
+            .bounds()
+            .size
+            .height;
+
+        // A bounds rect at the very top of the primary display (y == 0) maps to
+        // the topmost AppKit frame (origin.y == primary_h - h).
+        let bounds = (0.0, 0.0, 100.0, 50.0);
+        let frame = quartz_to_appkit_frame(bounds);
+        assert_eq!(frame.origin.x, 0.0);
+        assert!((frame.origin.y - (primary_h - 50.0)).abs() < 1e-6);
+        assert_eq!(frame.size.width, 100.0);
+        assert_eq!(frame.size.height, 50.0);
+
+        // A rect at the bottom (y == primary_h - h) maps to AppKit origin y == 0.
+        let bounds = (0.0, primary_h - 50.0, 100.0, 50.0);
+        let frame = quartz_to_appkit_frame(bounds);
+        assert!(frame.origin.y.abs() < 1e-6);
+    }
+
+    #[test]
+    fn quartz_to_appkit_frame_preserves_width_height() {
+        let primary_h = core_graphics::display::CGDisplay::main()
+            .bounds()
+            .size
+            .height;
+        let bounds = (10.0, 20.0, 800.0, 600.0);
+        let frame = quartz_to_appkit_frame(bounds);
+        assert_eq!(frame.size.width, 800.0);
+        assert_eq!(frame.size.height, 600.0);
+        // x is unchanged (only y flips).
+        assert_eq!(frame.origin.x, 10.0);
+        assert!((frame.origin.y - (primary_h - (20.0 + 600.0))).abs() < 1e-6);
+    }
+}
