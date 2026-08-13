@@ -483,6 +483,7 @@ fn draw_top_bar(cr: &cairo::Context, layout: &BarLayout, cfg: &TopBarConfig) {
 // 3. Process Execution & Cursor System
 // =========================================================================
 
+#[cfg(target_os = "linux")]
 fn run(cmd: &[&str]) -> Option<String> {
     let out = Command::new(cmd[0]).args(&cmd[1..]).output().ok()?;
     if out.status.success() {
@@ -492,6 +493,7 @@ fn run(cmd: &[&str]) -> Option<String> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn which(cmd: &str) -> bool {
     Command::new("sh")
         .args(["-c", &format!("command -v {cmd} >/dev/null 2>&1")])
@@ -540,6 +542,13 @@ fn signal_toggle() -> bool {
     false
 }
 
+/// Cursor position in the active menu's local canvas coordinates.
+///
+/// Linux: queried from hyprctl and converted into the monitor's local space.
+/// macOS: read from CoreGraphics and converted into the display's local
+/// space (the overlay window is moved to cover that same display, so the two
+/// coordinate systems line up exactly).
+#[cfg(target_os = "linux")]
 fn cursor_local_pos() -> Option<(f64, f64)> {
     if which("hyprctl") {
         if let Some(res) = run(&["hyprctl", "-j", "cursorpos"]) {
@@ -565,6 +574,13 @@ fn cursor_local_pos() -> Option<(f64, f64)> {
         }
     }
     None
+}
+
+#[cfg(target_os = "macos")]
+fn cursor_local_pos() -> Option<(f64, f64)> {
+    let (x, y) = window::macos_cursor_point()?;
+    let (dx, dy, _w, _h) = window::macos_display_under_cursor()?;
+    Some((x - dx, y - dy))
 }
 
 // =========================================================================
@@ -1510,6 +1526,14 @@ fn build_window(app: &Application) {
                     // Reopen: recenter at the cursor and reset navigation.
                     shown_t.store(true, Ordering::Relaxed);
                     if let Some(pos) = cursor_local_pos() {
+                        // Move the overlay onto the display holding the cursor
+                        // first, so `pos` (display-local coords) matches the
+                        // window's canvas. No-op on Linux (layer-shell window
+                        // already spans every monitor).
+                        #[cfg(target_os = "macos")]
+                        if let Some(bounds) = window::macos_display_under_cursor() {
+                            window::macos_move_overlay_to(&win_t, bounds);
+                        }
                         *center_t.write().unwrap() = pos;
                     }
                     *nav_t.write().unwrap() = vec![LevelSelection {
