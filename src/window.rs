@@ -63,6 +63,9 @@ pub fn setup_macos_overlay(window: &ApplicationWindow) {
     });
 }
 
+#[cfg(target_os = "macos")]
+const NS_FLOATING_WINDOW_LEVEL: i64 = 3;
+
 /// Reconfigure the underlying NSWindow so the GTK toplevel behaves like an
 /// overlay: borderless + transparent + floating above other windows, present
 /// on every Space (including over full-screen apps) WITHOUT ever entering
@@ -71,12 +74,9 @@ pub fn setup_macos_overlay(window: &ApplicationWindow) {
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
 fn apply_macos_overlay(window: &ApplicationWindow) -> bool {
-    use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
-    use cocoa::base::{id, NO, YES};
+    use cocoa::base::id;
     use gtk4::glib::translate::ToGlibPtr;
     use gtk4::prelude::NativeExt;
-
-    const NS_FLOATING_WINDOW_LEVEL: i64 = 3;
 
     let Some(surface) = window.surface() else {
         return false;
@@ -89,38 +89,51 @@ fn apply_macos_overlay(window: &ApplicationWindow) -> bool {
         return false;
     }
 
-    unsafe {
-        // Overwrite GTK's NSWindowCollectionBehaviorFullScreenPrimary mask:
-        // join every Space, show above full-screen apps as an auxiliary
-        // window, and don't shift with Spaces. No FullScreenPrimary => no
-        // exclusive Space is ever created.
-        ns_window.setCollectionBehavior_(
-            NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
-        );
-        ns_window.setLevel_(NS_FLOATING_WINDOW_LEVEL);
-        ns_window.setOpaque_(NO);
-        ns_window.setHasShadow_(NO);
+    // Size to the display under the cursor when we can, so the overlay lands
+    // on the screen the menu is invoked from. Falls back to the display the
+    // window currently sits on.
+    unsafe { configure_ns_window(ns_window, macos_display_under_cursor()) };
+    true
+}
 
-        // Size to the display under the cursor when we can, so the overlay
-        // lands on the screen the menu is invoked from. Falls back to the
-        // display the window currently sits on.
-        match macos_display_under_cursor() {
-            Some(b) => move_overlay_to(ns_window, b),
-            None => {
-                let mut screen = ns_window.screen();
-                if screen.is_null() {
-                    screen = cocoa::appkit::NSScreen::mainScreen(std::ptr::null_mut());
-                }
-                if !screen.is_null() {
-                    let frame = cocoa::appkit::NSScreen::frame(screen);
-                    ns_window.setFrame_display_(frame, YES);
-                }
+/// Configure an overlay NSWindow: floating level, transparent, no shadow,
+/// present on every Space (but never entering an exclusive Space), and sized
+/// to the given Quartz display bounds if provided.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+unsafe fn configure_ns_window(
+    ns_window: cocoa::base::id,
+    bounds: Option<(f64, f64, f64, f64)>,
+) {
+    use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
+    use cocoa::base::{NO, YES};
+
+    // Overwrite GTK's NSWindowCollectionBehaviorFullScreenPrimary mask:
+    // join every Space, show above full-screen apps as an auxiliary window,
+    // and don't shift with Spaces. No FullScreenPrimary => no exclusive
+    // Space is ever created.
+    ns_window.setCollectionBehavior_(
+        NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
+    );
+    ns_window.setLevel_(NS_FLOATING_WINDOW_LEVEL);
+    ns_window.setOpaque_(NO);
+    ns_window.setHasShadow_(NO);
+
+    match bounds {
+        Some(b) => move_overlay_to(ns_window, b),
+        None => {
+            let mut screen = ns_window.screen();
+            if screen.is_null() {
+                screen = cocoa::appkit::NSScreen::mainScreen(std::ptr::null_mut());
+            }
+            if !screen.is_null() {
+                let frame = cocoa::appkit::NSScreen::frame(screen);
+                ns_window.setFrame_display_(frame, YES);
             }
         }
     }
-    true
 }
 
 /// Convert a display's Quartz bounds (top-left origin, y-down, the same
@@ -184,7 +197,10 @@ pub fn macos_display_under_cursor() -> Option<(f64, f64, f64, f64)> {
 }
 
 /// Move the overlay window so it covers the display with the given Quartz
-/// bounds (e.g. the display now under the cursor, on daemon reopen).
+/// bounds (e.g. the display now under the cursor, on daemon reopen). Also
+/// (re)applies the overlay NSWindow configuration. Safe to call right after
+/// `present()`: the macOS backend defers the actual on-screen swap until the
+/// next frame, so the window never renders at the old location.
 #[cfg(target_os = "macos")]
 pub fn macos_move_overlay_to(window: &ApplicationWindow, bounds: (f64, f64, f64, f64)) {
     use gtk4::glib::translate::ToGlibPtr;
@@ -197,7 +213,7 @@ pub fn macos_move_overlay_to(window: &ApplicationWindow, bounds: (f64, f64, f64,
         };
         if !ns_window.is_null() {
             unsafe {
-                move_overlay_to(ns_window, bounds);
+                configure_ns_window(ns_window, Some(bounds));
             }
         }
     }

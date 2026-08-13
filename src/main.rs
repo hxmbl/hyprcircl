@@ -1526,14 +1526,6 @@ fn build_window(app: &Application) {
                     // Reopen: recenter at the cursor and reset navigation.
                     shown_t.store(true, Ordering::Relaxed);
                     if let Some(pos) = cursor_local_pos() {
-                        // Move the overlay onto the display holding the cursor
-                        // first, so `pos` (display-local coords) matches the
-                        // window's canvas. No-op on Linux (layer-shell window
-                        // already spans every monitor).
-                        #[cfg(target_os = "macos")]
-                        if let Some(bounds) = window::macos_display_under_cursor() {
-                            window::macos_move_overlay_to(&win_t, bounds);
-                        }
                         *center_t.write().unwrap() = pos;
                     }
                     *nav_t.write().unwrap() = vec![LevelSelection {
@@ -1544,6 +1536,17 @@ fn build_window(app: &Application) {
                     window::set_keyboard_exclusive(&win_t, true);
                     canvas_t.queue_draw();
                     win_t.present();
+
+                    // macOS: move the overlay onto the display holding the
+                    // cursor. Must happen AFTER present — the macOS backend
+                    // defers showing until the next frame swap, so this lands
+                    // before anything is rendered and avoids a one-frame flash
+                    // at the old location. No-op on Linux (layer-shell window
+                    // already spans every monitor).
+                    #[cfg(target_os = "macos")]
+                    if let Some(bounds) = window::macos_display_under_cursor() {
+                        window::macos_move_overlay_to(&win_t, bounds);
+                    }
                 }
             }
             ControlFlow::Continue
@@ -1553,7 +1556,16 @@ fn build_window(app: &Application) {
     window.present();
 
     #[cfg(target_os = "macos")]
-    window::setup_macos_overlay(&window);
+    {
+        // Position the overlay before the first frame renders (present() is
+        // synchronous and creates the surface), so launch shows no flash.
+        if let Some(bounds) = window::macos_display_under_cursor() {
+            window::macos_move_overlay_to(&window, bounds);
+        }
+        // Retry-loop safety net for config/positioning if the surface wasn't
+        // created synchronously (e.g. cold GTK boot).
+        window::setup_macos_overlay(&window);
+    }
 }
 
 // =========================================================================
