@@ -1527,6 +1527,9 @@ fn build_window(app: &Application) {
     }
 
     window.present();
+
+    #[cfg(target_os = "macos")]
+    window::setup_macos_overlay(&window);
 }
 
 // =========================================================================
