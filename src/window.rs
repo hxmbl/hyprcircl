@@ -1,5 +1,6 @@
 #![allow(deprecated)] // cocoa crate is deprecated in favour of objc2; keep it for now
 
+#[cfg(target_os = "macos")]
 use gtk4::prelude::GtkWindowExt;
 use gtk4::ApplicationWindow;
 
