@@ -219,6 +219,34 @@ pub fn macos_move_overlay_to(window: &ApplicationWindow, bounds: (f64, f64, f64,
     }
 }
 
+/// Canvas coordinates for the radial menu center such that the circle lands
+/// exactly on the physical cursor, given the window's *current* frame. This
+/// is robust to the window not covering the display exactly (e.g. the macOS
+/// menu-bar strip on top), unlike using display-local cursor coordinates.
+#[cfg(target_os = "macos")]
+pub fn macos_canvas_center_under_cursor(window: &ApplicationWindow) -> Option<(f64, f64)> {
+    use gtk4::glib::translate::ToGlibPtr;
+    use gtk4::prelude::NativeExt;
+
+    let (cx, cy) = macos_cursor_point()?;
+    let surface = window.surface()?;
+    let ns_window = unsafe {
+        let raw: *mut gdk4::ffi::GdkSurface = surface.to_glib_none().0;
+        gdk_macos_surface_get_native_window(raw.cast()) as cocoa::base::id
+    };
+    if ns_window.is_null() {
+        return None;
+    }
+    unsafe {
+        use cocoa::appkit::NSWindow;
+        let frame = NSWindow::frame(ns_window);
+        // Window content top-left in Quartz (top-left origin, y-down).
+        let primary_h = core_graphics::display::CGDisplay::main().bounds().size.height;
+        let canvas_top_quartz = primary_h - (frame.origin.y + frame.size.height);
+        Some((cx - frame.origin.x, cy - canvas_top_quartz))
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn set_keyboard_exclusive(window: &ApplicationWindow, exclusive: bool) {
     use gtk4_layer_shell::{KeyboardMode, LayerShell};

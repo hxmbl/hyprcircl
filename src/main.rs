@@ -52,6 +52,30 @@ fn signal_toggle() -> bool {
     false
 }
 
+/// Re-anchor the menu center so the radial circle is exactly under the cursor.
+///
+/// Linux: the layer-shell surface spans the whole output, so the cursor is
+/// taken in display-local coordinates (hyprctl, matching the canvas origin).
+/// macOS: move the overlay onto the display under the cursor, then compute the
+/// canvas center from the window's *actual* frame + cursor so the circle lands
+/// on the cursor even when the frame doesn't exactly cover the display.
+#[cfg(target_os = "macos")]
+fn recenter_under_cursor(window: &gtk4::ApplicationWindow, center: &RwLock<(f64, f64)>) {
+    if let Some(bounds) = window::macos_display_under_cursor() {
+        window::macos_move_overlay_to(window, bounds);
+    }
+    if let Some(c) = window::macos_canvas_center_under_cursor(window) {
+        *center.write().unwrap() = c;
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn recenter_under_cursor(_window: &gtk4::ApplicationWindow, center: &RwLock<(f64, f64)>) {
+    if let Some(pos) = cursor_local_pos() {
+        *center.write().unwrap() = pos;
+    }
+}
+
 // =========================================================================
 // Main Application Window & Controller Logic
 // =========================================================================
@@ -838,9 +862,6 @@ fn build_window(app: &Application) {
                 } else {
                     // Reopen: recenter at the cursor and reset navigation.
                     shown_t.store(true, Ordering::Relaxed);
-                    if let Some(pos) = cursor_local_pos() {
-                        *center_t.write().unwrap() = pos;
-                    }
                     *nav_t.write().unwrap() = vec![LevelSelection {
                         selected_child_index: None,
                         parent_mid_angle: 0.0,
@@ -850,16 +871,13 @@ fn build_window(app: &Application) {
                     canvas_t.queue_draw();
                     win_t.present();
 
-                    // macOS: move the overlay onto the display holding the
-                    // cursor. Must happen AFTER present — the macOS backend
-                    // defers showing until the next frame swap, so this lands
-                    // before anything is rendered and avoids a one-frame flash
-                    // at the old location. No-op on Linux (layer-shell window
-                    // already spans every monitor).
-                    #[cfg(target_os = "macos")]
-                    if let Some(bounds) = window::macos_display_under_cursor() {
-                        window::macos_move_overlay_to(&win_t, bounds);
-                    }
+                    // Move the overlay onto the display holding the cursor and
+                    // snap the circle center to it. Must happen AFTER present —
+                    // the macOS backend defers showing until the next frame
+                    // swap, so this lands before anything is rendered and
+                    // avoids a one-frame flash at the old location. On Linux
+                    // the layer-shell window already spans every monitor.
+                    recenter_under_cursor(&win_t, &center_t);
                 }
             }
             ControlFlow::Continue
@@ -878,5 +896,9 @@ fn build_window(app: &Application) {
         // Retry-loop safety net for config/positioning if the surface wasn't
         // created synchronously (e.g. cold GTK boot).
         window::setup_macos_overlay(&window);
+        // Snap the circle center to the cursor using the window's actual
+        // frame (the window may not cover the display exactly, e.g. the
+        // macOS menu-bar strip), so the menu always spawns on the cursor.
+        recenter_under_cursor(&window, &center_pos);
     }
 }
