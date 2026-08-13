@@ -6,25 +6,25 @@ use gtk4::glib::translate::ToGlibPtr;
 use gtk4::pango;
 
 use crate::config::TopBarConfig;
+use crate::theme::Theme;
 
 // pangocairo FFI — symbols are already linked through gtk4
 extern "C" {
     fn pango_cairo_font_map_get_default() -> *mut std::ffi::c_void;
-    fn pango_font_map_create_context(fontmap: *mut std::ffi::c_void) -> *mut pango::ffi::PangoContext;
-    fn pango_cairo_show_layout(
-        cr: *mut cairo::ffi::cairo_t,
-        layout: *mut pango::ffi::PangoLayout,
-    );
+    fn pango_font_map_create_context(
+        fontmap: *mut std::ffi::c_void,
+    ) -> *mut pango::ffi::PangoContext;
+    fn pango_cairo_show_layout(cr: *mut cairo::ffi::cairo_t, layout: *mut pango::ffi::PangoLayout);
 }
 
 /// Render text onto a Cairo context using Pango (handles Nerd Font glyphs).
-pub fn pango_show(cr: &cairo::Context, font: &str, size: i32, text: &str) {
+pub fn pango_show(cr: &cairo::Context, font: &str, size: i32, weight: pango::Weight, text: &str) {
     unsafe {
         let ctx_ptr = pango_font_map_create_context(pango_cairo_font_map_get_default());
         let ctx: pango::Context = glib::translate::from_glib_full(ctx_ptr);
         let layout = pango::Layout::new(&ctx);
         let mut desc = pango::FontDescription::from_string(font);
-        desc.set_weight(pango::Weight::Bold);
+        desc.set_weight(weight);
         desc.set_size(size);
         layout.set_font_description(Some(&desc));
         layout.set_text(text);
@@ -33,18 +33,33 @@ pub fn pango_show(cr: &cairo::Context, font: &str, size: i32, text: &str) {
 }
 
 /// Measure text width using Pango.
-pub fn pango_measure(font: &str, size: i32, text: &str) -> f64 {
+pub fn pango_measure(font: &str, size: i32, weight: pango::Weight, text: &str) -> f64 {
     unsafe {
         let ctx_ptr = pango_font_map_create_context(pango_cairo_font_map_get_default());
         let ctx: pango::Context = glib::translate::from_glib_full(ctx_ptr);
         let layout = pango::Layout::new(&ctx);
         let mut desc = pango::FontDescription::from_string(font);
-        desc.set_weight(pango::Weight::Bold);
+        desc.set_weight(weight);
         desc.set_size(size);
         layout.set_font_description(Some(&desc));
         layout.set_text(text);
         let (rect, _) = layout.pixel_extents();
         rect.width() as f64
+    }
+}
+
+/// Map a CSS numeric font-weight (100..900) onto a Pango weight.
+pub fn pango_weight(w: i32) -> pango::Weight {
+    match w {
+        100 => pango::Weight::Thin,
+        200 => pango::Weight::Ultralight,
+        300 => pango::Weight::Light,
+        400 => pango::Weight::Normal,
+        500 => pango::Weight::Medium,
+        600 => pango::Weight::Semibold,
+        800 => pango::Weight::Ultrabold,
+        900 => pango::Weight::Heavy,
+        _ => pango::Weight::Bold,
     }
 }
 
@@ -101,14 +116,26 @@ pub fn draw_rounded_sector(
     // Center angles for the 4 corner circles
     let theta_os = a1 + delta_out; // Outer Start
     let theta_oe = a2 - delta_out; // Outer End
-    let theta_ie = a2 - delta_in;  // Inner End
-    let theta_is = a1 + delta_in;  // Inner Start
+    let theta_ie = a2 - delta_in; // Inner End
+    let theta_is = a1 + delta_in; // Inner Start
 
     // Calculated center coordinates for each corner arc
-    let c_os = (cx + (r_out - r) * theta_os.cos(), cy + (r_out - r) * theta_os.sin());
-    let c_oe = (cx + (r_out - r) * theta_oe.cos(), cy + (r_out - r) * theta_oe.sin());
-    let c_ie = (cx + (r_in + r) * theta_ie.cos(), cy + (r_in + r) * theta_ie.sin());
-    let c_is = (cx + (r_in + r) * theta_is.cos(), cy + (r_in + r) * theta_is.sin());
+    let c_os = (
+        cx + (r_out - r) * theta_os.cos(),
+        cy + (r_out - r) * theta_os.sin(),
+    );
+    let c_oe = (
+        cx + (r_out - r) * theta_oe.cos(),
+        cy + (r_out - r) * theta_oe.sin(),
+    );
+    let c_ie = (
+        cx + (r_in + r) * theta_ie.cos(),
+        cy + (r_in + r) * theta_ie.sin(),
+    );
+    let c_is = (
+        cx + (r_in + r) * theta_is.cos(),
+        cy + (r_in + r) * theta_is.sin(),
+    );
 
     cr.new_path();
 
@@ -158,21 +185,28 @@ pub struct BarLayout {
 }
 
 /// Measure a module string's rendered width for the pill font/size.
-fn measure_pill_text(font: &str, text: &str) -> f64 {
-    pango_measure(font, 13 * pango::SCALE, text)
+fn measure_pill_text(theme: &Theme, text: &str) -> f64 {
+    let size = (theme.pill_font_size * pango::SCALE as f64) as i32;
+    pango_measure(
+        &theme.pill_font,
+        size,
+        pango_weight(theme.pill_font_weight),
+        text,
+    )
 }
 
 /// Compute pill geometry from the current module outputs. `None` when every
 /// module is empty (the pill then isn't drawn at all).
 pub fn top_bar_layout(
     cfg: &TopBarConfig,
+    theme: &Theme,
     r_out: f64,
     outputs: &[String],
     cx: f64,
     cy: f64,
 ) -> Option<BarLayout> {
-    let height = cfg.height;
-    let gap = 18.0; // spacing between modules
+    let height = theme.pill_height;
+    let gap = theme.pill_gap; // spacing between modules
 
     let mut texts = Vec::new();
     let mut indices = Vec::new();
@@ -196,16 +230,16 @@ pub fn top_bar_layout(
     let mut widths = Vec::new();
     let mut total_w = 0.0;
     for (j, t) in texts.iter().enumerate() {
-        let w = measure_pill_text(&cfg.font, t);
+        let w = measure_pill_text(theme, t);
         widths.push(w);
         total_w += w;
         if j + 1 < texts.len() {
             total_w += gap;
         }
     }
-    let width = total_w + cfg.padding_x * 2.0;
+    let width = total_w + theme.pill_padding_x * 2.0;
     let rx = cx - width / 2.0;
-    let ry = cy - r_out - cfg.offset_y - height;
+    let ry = cy - r_out - theme.pill_offset_y - height;
 
     let mut lefts = Vec::new();
     let mut x = cx - total_w / 2.0;
@@ -244,12 +278,12 @@ pub fn hit_test_pill(layout: &BarLayout, mx: f64, my: f64) -> Option<usize> {
     None
 }
 
-pub fn draw_top_bar(cr: &cairo::Context, layout: &BarLayout, cfg: &TopBarConfig) {
+pub fn draw_top_bar(cr: &cairo::Context, layout: &BarLayout, theme: &Theme) {
     let rx = layout.rx;
     let ry = layout.ry;
     let width = layout.width;
     let height = layout.height;
-    let r = cfg.corner_radius.min(height / 2.0);
+    let r = theme.pill_corner.min(height / 2.0);
 
     // Background pill
     cr.new_sub_path();
@@ -259,17 +293,19 @@ pub fn draw_top_bar(cr: &cairo::Context, layout: &BarLayout, cfg: &TopBarConfig)
     cr.arc(rx + r, ry + r, r, PI, 3.0 * PI / 2.0);
     cr.close_path();
 
-    let [bg_r, bg_g, bg_b, bg_a] = cfg.background;
+    let (bg_r, bg_g, bg_b, bg_a) = theme.pill_bg;
     cr.set_source_rgba(bg_r, bg_g, bg_b, bg_a);
     let _ = cr.fill();
 
     // Module text via Pango (handles Nerd Font glyphs correctly).
-    let [fg_r, fg_g, fg_b, fg_a] = cfg.foreground;
+    let (fg_r, fg_g, fg_b, fg_a) = theme.pill_fg;
     cr.set_source_rgba(fg_r, fg_g, fg_b, fg_a);
     let text_y = ry + height / 2.0;
+    let size = (theme.pill_font_size * pango::SCALE as f64) as i32;
+    let weight = pango_weight(theme.pill_font_weight);
     for (k, t) in layout.texts.iter().enumerate() {
         cr.move_to(layout.lefts[k], text_y);
-        pango_show(cr, &cfg.font, 13 * pango::SCALE, t);
+        pango_show(cr, &theme.pill_font, size, weight, t);
     }
 }
 
@@ -280,18 +316,12 @@ pub fn draw_top_bar(cr: &cairo::Context, layout: &BarLayout, cfg: &TopBarConfig)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{default_font, BarModule};
+    use crate::config::BarModule;
+    use crate::theme::Theme;
 
     fn test_config() -> TopBarConfig {
         TopBarConfig {
             enabled: true,
-            height: 28.0,
-            padding_x: 14.0,
-            offset_y: 24.0,
-            corner_radius: 14.0,
-            background: [0.0; 4],
-            foreground: [1.0; 4],
-            font: default_font(),
             modules: vec![
                 BarModule {
                     format: "{output}".into(),
@@ -311,7 +341,8 @@ mod tests {
     fn pill_layout_hit_test() {
         let cfg = test_config();
         let outputs = vec!["1".to_string(), "2".to_string()];
-        let layout = top_bar_layout(&cfg, 100.0, &outputs, 500.0, 500.0).expect("layout");
+        let layout =
+            top_bar_layout(&cfg, &Theme::default(), 100.0, &outputs, 500.0, 500.0).expect("layout");
 
         assert_eq!(layout.texts, vec!["A 1".to_string(), "B 2".to_string()]);
         assert_eq!(layout.indices, vec![0, 1]);
@@ -334,12 +365,129 @@ mod tests {
     }
 
     #[test]
+    fn pango_measure_returns_positive_width() {
+        let w = pango_measure(
+            &Theme::default().pill_font,
+            13 * pango::SCALE,
+            pango::Weight::Bold,
+            "Terminal",
+        );
+        assert!(w > 0.0, "measured text width must be positive");
+        // Wider text measures wider.
+        let w2 = pango_measure(
+            &Theme::default().pill_font,
+            13 * pango::SCALE,
+            pango::Weight::Bold,
+            "Terminal Terminal",
+        );
+        assert!(w2 > w);
+    }
+
+    #[test]
+    fn draw_rounded_sector_builds_path() {
+        use gtk4::cairo::{Context, Format, ImageSurface};
+
+        let surface = ImageSurface::create(Format::ARgb32, 400, 400).expect("image surface");
+        let cr = Context::new(&surface).expect("context");
+
+        // A normal wedge produces a non-empty path.
+        draw_rounded_sector(&cr, 200.0, 200.0, 40.0, 110.0, 0.0, PI / 2.0, 6.0);
+        assert!(cr.has_current_point().unwrap());
+
+        // A degenerate (zero/negative span) wedge issues no path commands.
+        cr.new_path();
+        draw_rounded_sector(&cr, 200.0, 200.0, 40.0, 110.0, 1.0, 1.0, 6.0);
+        assert!(!cr.has_current_point().unwrap());
+    }
+
+    #[test]
+    fn draw_rounded_sector_clamps_corner_radius() {
+        use gtk4::cairo::{Context, Format, ImageSurface};
+
+        let surface = ImageSurface::create(Format::ARgb32, 400, 400).expect("image surface");
+        let cr = Context::new(&surface).expect("context");
+
+        // A huge requested corner radius on a thin ring must not panic and
+        // still produce a path (radius is clamped internally).
+        draw_rounded_sector(&cr, 200.0, 200.0, 100.0, 110.0, 0.0, PI, 999.0);
+        assert!(cr.has_current_point().unwrap());
+    }
+
+    #[test]
+    fn top_bar_layout_centers_on_cursor() {
+        let cfg = test_config();
+        let layout = top_bar_layout(
+            &cfg,
+            &Theme::default(),
+            100.0,
+            &["x".to_string(), "y".to_string()],
+            500.0,
+            500.0,
+        )
+        .expect("layout");
+        // Pill is horizontally centered on the cursor x.
+        assert!((layout.rx + layout.width / 2.0 - 500.0).abs() < 1e-6);
+        // Pill sits above the menu (above outer radius + offset).
+        assert!(layout.ry < 500.0 - 100.0);
+    }
+
+    #[test]
+    fn top_bar_layout_all_empty_modules_is_none() {
+        let mut cfg = test_config();
+        // Strip icons from every module and feed empty outputs so no module
+        // produces visible text -> the pill is not drawn at all.
+        for m in cfg.modules.iter_mut() {
+            m.icon = String::new();
+        }
+        let outputs = vec![String::new(); cfg.modules.len()];
+        assert!(top_bar_layout(&cfg, &Theme::default(), 100.0, &outputs, 500.0, 500.0).is_none());
+    }
+
+    #[test]
+    fn pango_show_renders_without_panic() {
+        use gtk4::cairo::{Context, Format, ImageSurface};
+
+        let surface = ImageSurface::create(Format::ARgb32, 200, 60).expect("image surface");
+        let cr = Context::new(&surface).expect("context");
+        // Smoke test: drawing text onto a headless surface must not panic.
+        let t = Theme::default();
+        pango_show(
+            &cr,
+            &t.pill_font,
+            13 * pango::SCALE,
+            pango::Weight::Bold,
+            "Terminal",
+        );
+    }
+
+    #[test]
+    fn draw_top_bar_renders_without_panic() {
+        use gtk4::cairo::{Context, Format, ImageSurface};
+
+        let cfg = test_config();
+        let layout = top_bar_layout(
+            &cfg,
+            &Theme::default(),
+            100.0,
+            &["1".to_string(), "2".to_string()],
+            500.0,
+            500.0,
+        )
+        .expect("layout");
+        let surface = ImageSurface::create(Format::ARgb32, 800, 800).expect("image surface");
+        let cr = Context::new(&surface).expect("context");
+        // Smoke test: pill background + module text must render without panic.
+        draw_top_bar(&cr, &layout, &Theme::default());
+    }
+
+    #[test]
     fn pill_layout_skips_empty_modules() {
         let mut cfg = test_config();
         // Icon-less module whose output is empty renders nothing -> skipped.
         cfg.modules[0].icon = String::new();
         let outputs = vec![String::new(), "2".to_string()];
-        let layout = top_bar_layout(&cfg, 100.0, &outputs, 500.0, 500.0).expect("layout");
+        let layout =
+            top_bar_layout(&cfg, &Theme::default(), 100.0, &outputs, 500.0, 500.0).expect("layout");
         // First module is empty -> skipped, so its text must map to module 1.
         assert_eq!(layout.indices, vec![1]);
         assert_eq!(
