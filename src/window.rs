@@ -1,3 +1,5 @@
+#![allow(deprecated)] // cocoa crate is deprecated in favour of objc2; keep it for now
+
 use gtk4::prelude::GtkWindowExt;
 use gtk4::ApplicationWindow;
 
@@ -69,7 +71,7 @@ pub fn setup_macos_overlay(window: &ApplicationWindow) {
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
 fn apply_macos_overlay(window: &ApplicationWindow) -> bool {
-    use cocoa::appkit::{NSScreen, NSWindow, NSWindowCollectionBehavior};
+    use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
     use cocoa::base::{id, NO, YES};
     use gtk4::glib::translate::ToGlibPtr;
     use gtk4::prelude::NativeExt;
@@ -101,19 +103,104 @@ fn apply_macos_overlay(window: &ApplicationWindow) -> bool {
         ns_window.setOpaque_(NO);
         ns_window.setHasShadow_(NO);
 
-        // Size to the screen the window sits on (the frame is in the global
-        // bottom-left-origin coordinate space, so it covers the display fully
-        // including the menu-bar strip).
-        let mut screen = ns_window.screen();
-        if screen.is_null() {
-            screen = NSScreen::mainScreen(std::ptr::null_mut());
-        }
-        if !screen.is_null() {
-            let frame = NSScreen::frame(screen);
-            ns_window.setFrame_display_(frame, YES);
+        // Size to the display under the cursor when we can, so the overlay
+        // lands on the screen the menu is invoked from. Falls back to the
+        // display the window currently sits on.
+        match macos_display_under_cursor() {
+            Some(b) => move_overlay_to(ns_window, b),
+            None => {
+                let mut screen = ns_window.screen();
+                if screen.is_null() {
+                    screen = cocoa::appkit::NSScreen::mainScreen(std::ptr::null_mut());
+                }
+                if !screen.is_null() {
+                    let frame = cocoa::appkit::NSScreen::frame(screen);
+                    ns_window.setFrame_display_(frame, YES);
+                }
+            }
         }
     }
     true
+}
+
+/// Convert a display's Quartz bounds (top-left origin, y-down, the same
+/// space CGEventGetLocation uses) into the AppKit screen-frame space (bottom-
+/// left origin, y-up) used by NSWindow frames. The flip is exact and global:
+/// vertical flipping across the primary display's top edge.
+#[cfg(target_os = "macos")]
+fn quartz_to_appkit_frame(bounds: (f64, f64, f64, f64)) -> cocoa::foundation::NSRect {
+    use cocoa::foundation::{NSPoint, NSRect, NSSize};
+
+    let (x, y, w, h) = bounds;
+    let primary_h = core_graphics::display::CGDisplay::main().bounds().size.height;
+    NSRect::new(
+        NSPoint::new(x, primary_h - (y + h)),
+        NSSize::new(w, h),
+    )
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+unsafe fn move_overlay_to(ns_window: cocoa::base::id, bounds: (f64, f64, f64, f64)) {
+    use cocoa::appkit::NSWindow;
+    use cocoa::base::YES;
+
+    ns_window.setFrame_display_(quartz_to_appkit_frame(bounds), YES);
+}
+
+/// Current global cursor position in Quartz coordinates (top-left origin,
+/// y-down). Uses the CGEventCreate(NULL) trick: a null event's location IS
+/// the current mouse position.
+#[cfg(target_os = "macos")]
+pub fn macos_cursor_point() -> Option<(f64, f64)> {
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    let event = CGEvent::new(source).ok()?;
+    let p = event.location();
+    Some((p.x, p.y))
+}
+
+/// `(x, y, w, h)` of the active display containing the cursor, in Quartz
+/// global coordinates. `None` if no display matches (shouldn't happen).
+#[cfg(target_os = "macos")]
+pub fn macos_display_under_cursor() -> Option<(f64, f64, f64, f64)> {
+    use core_graphics::display::CGDisplay;
+
+    let (x, y) = macos_cursor_point()?;
+    let ids = CGDisplay::active_displays().ok()?;
+    for id in ids {
+        let b = CGDisplay::new(id).bounds();
+        if x >= b.origin.x
+            && x < b.origin.x + b.size.width
+            && y >= b.origin.y
+            && y < b.origin.y + b.size.height
+        {
+            return Some((b.origin.x, b.origin.y, b.size.width, b.size.height));
+        }
+    }
+    None
+}
+
+/// Move the overlay window so it covers the display with the given Quartz
+/// bounds (e.g. the display now under the cursor, on daemon reopen).
+#[cfg(target_os = "macos")]
+pub fn macos_move_overlay_to(window: &ApplicationWindow, bounds: (f64, f64, f64, f64)) {
+    use gtk4::glib::translate::ToGlibPtr;
+    use gtk4::prelude::NativeExt;
+
+    if let Some(surface) = window.surface() {
+        let ns_window = unsafe {
+            let raw: *mut gdk4::ffi::GdkSurface = surface.to_glib_none().0;
+            gdk_macos_surface_get_native_window(raw.cast()) as cocoa::base::id
+        };
+        if !ns_window.is_null() {
+            unsafe {
+                move_overlay_to(ns_window, bounds);
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
