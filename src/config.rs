@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 // Data Configuration Model
 // =========================================================================
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MenuItem {
     pub label: String,
     pub icon: String,
@@ -25,7 +25,7 @@ impl MenuItem {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct BarModule {
     /// Shell command whose stdout becomes the module text (Waybar-style).
     /// Optional when a `stream_command` is used instead.
@@ -66,7 +66,7 @@ pub struct BarModule {
     pub on_scroll_down: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TopBarConfig {
     pub enabled: bool,
     /// Ordered list of Waybar-style modules rendered inside the pill.
@@ -75,7 +75,7 @@ pub struct TopBarConfig {
     pub modules: Vec<BarModule>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RadialConfig {
     pub inner_radius: f64,
     pub outer_radius: f64,
@@ -95,6 +95,11 @@ pub struct RadialConfig {
     #[serde(default = "default_true")]
     pub show_labels: bool,
     pub items: Vec<MenuItem>,
+    /// Bumped by the watcher on every successful reload so consumers can
+    /// detect "the module list changed" and rebuild index-keyed state
+    /// instead of misattributing streams/outputs across a reorder.
+    #[serde(skip, default)]
+    pub generation: u64,
 }
 
 fn default_ring_thickness() -> f64 {
@@ -119,6 +124,7 @@ impl Default for RadialConfig {
             item_gap_degrees: 2.0,
             notify_only: false,
             show_labels: true,
+            generation: 0,
             top_bar: TopBarConfig {
                 enabled: true,
                 modules: vec![
@@ -232,45 +238,72 @@ fn config_paths() -> Vec<String> {
     paths
 }
 
-/// Load `RadialConfig` from TOML, falling back to defaults when no file is found.
-pub fn load_config() -> RadialConfig {
+/// Load `RadialConfig` plus the exact file it came from.
+///
+/// A missing (or unreadable) candidate moves the search down the priority
+/// list. A candidate that exists but fails to parse STOPS the search: silently
+/// substituting a lower-priority config — or defaults — hides real errors.
+/// In that case defaults are returned together with the broken path so the
+/// daemon still watches it; fixing the file applies live.
+pub fn load_config_with_path() -> (RadialConfig, Option<String>) {
     for path in config_paths() {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            match toml::from_str::<RadialConfig>(&contents) {
-                Ok(cfg) => {
-                    println!("[CONFIG] Loaded {path}");
-                    return cfg;
-                }
-                Err(e) => println!("[CONFIG] Failed to parse {path}: {e}"),
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        return match toml::from_str::<RadialConfig>(&contents) {
+            Ok(cfg) => {
+                println!("[CONFIG] Loaded {path}");
+                (cfg, Some(path))
             }
-        }
+            Err(e) => {
+                println!("[CONFIG] Failed to parse {path}, using defaults until fixed: {e}");
+                (RadialConfig::default(), Some(path))
+            }
+        };
     }
 
     println!("[CONFIG] No config found, using defaults");
-    RadialConfig::default()
+    (RadialConfig::default(), None)
 }
 
-/// First existing config file, if any (used to watch for changes).
-pub fn find_config_path() -> Option<String> {
-    config_paths()
-        .into_iter()
-        .find(|p| std::path::Path::new(p).exists())
-}
-
-/// Find a CSS file in the same directories as the config.
-pub fn find_css_path() -> Option<String> {
-    let dirs: Vec<String> = config_paths()
-        .into_iter()
-        .filter_map(|p| {
+/// Find a CSS file, preferring the directory of the config that actually
+/// loaded, then the remaining config directories in priority order. The
+/// cwd fallback resolves to `./hyprcircl.css` (a relative config path's
+/// parent is empty, which must not become a filesystem-root probe).
+pub fn find_css_path(config_file: Option<&str>) -> Option<String> {
+    let mut dirs: Vec<String> = Vec::new();
+    let push_dir = |d: std::path::PathBuf, dirs: &mut Vec<String>| {
+        let dir = if d.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            d.to_string_lossy().into_owned()
+        };
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+    if let Some(cfg) = config_file {
+        push_dir(
+            std::path::Path::new(cfg)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default(),
+            &mut dirs,
+        );
+    }
+    for p in config_paths() {
+        push_dir(
             std::path::Path::new(&p)
                 .parent()
-                .map(|d| d.to_string_lossy().to_string())
-        })
-        .collect();
+                .map(|q| q.to_path_buf())
+                .unwrap_or_default(),
+            &mut dirs,
+        );
+    }
     for dir in dirs {
-        let css = format!("{}/hyprcircl.css", dir);
-        if std::path::Path::new(&css).exists() {
-            return Some(css);
+        let css = std::path::Path::new(&dir).join("hyprcircl.css");
+        if css.exists() {
+            return Some(css.to_string_lossy().into_owned());
         }
     }
     None
@@ -279,6 +312,12 @@ pub fn find_css_path() -> Option<String> {
 // =========================================================================
 // Unit tests for config model, radii math, and config IO
 // =========================================================================
+
+#[cfg(test)]
+pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 #[cfg(test)]
 mod tests {
@@ -362,6 +401,7 @@ mod tests {
 
     #[test]
     fn config_paths_priority_order() {
+        let _guard = env_lock();
         // With no env vars, only the cwd fallbacks are present.
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::remove_var("HOME");
@@ -426,28 +466,56 @@ items = [
     fn load_config_falls_back_to_default_when_unparseable() {
         // An unparseable file in cwd would normally print an error; instead we
         // verify `RadialConfig::default()` is a usable fallback representation
-        // and that `load_config`'s contract (never panic) holds structurally.
+        // and that `load_config_with_path`'s contract (never panic) holds.
         let cfg = RadialConfig::default();
         assert!(cfg.get_level_radii(0).1 > 0.0);
     }
 
     #[test]
-    fn find_config_path_finds_existing_toml() {
+    fn load_config_with_path_finds_existing_toml() {
+        let _guard = env_lock();
         // The project ships a hyprcircl.toml in the crate root; if cwd is the
-        // crate root it must be discoverable.
+        // crate root it must be discoverable, and the reported path is the
+        // exact file the config came from (the watcher follows this path).
+        std::env::remove_var("XDG_CONFIG_HOME");
         if let Ok(cwd) = std::env::current_dir() {
             let root = cwd.join("hyprcircl.toml");
             if root.exists() {
-                let found = find_config_path().expect("config present in cwd");
+                let (_, found) = load_config_with_path();
+                let found = found.expect("config present in cwd");
                 assert!(std::path::Path::new(&found).exists());
+                assert!(found.ends_with("hyprcircl.toml"));
             }
         }
     }
 
     #[test]
+    fn load_config_with_path_reports_broken_file_instead_of_falling_through() {
+        let _guard = env_lock();
+        // An existing-but-unparseable candidate must stop the search and be
+        // reported as the active (watched) path, not silently skipped.
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let home = std::env::temp_dir().join(format!("hyprcircl-test-{}", std::process::id()));
+        let dir = home.join(".config/hyprcircl");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let broken = dir.join("hyprcircl.toml");
+        std::fs::write(&broken, "inner_radius = not a number").expect("write");
+
+        std::env::set_var("HOME", &home);
+        let (cfg, path) = load_config_with_path();
+        assert_eq!(cfg, RadialConfig::default(), "defaults while broken");
+        assert_eq!(path.as_deref(), Some(broken.to_string_lossy().as_ref()));
+        assert_eq!(cfg.generation, 0, "loader never bumps the generation");
+
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn find_css_path_returns_existing_or_none() {
+        let _guard = env_lock();
         // Must never panic and only ever return an existing path.
-        let res = find_css_path();
+        let res = find_css_path(None);
         if let Some(css) = res {
             assert!(std::path::Path::new(&css).exists());
         }
@@ -460,7 +528,15 @@ items = [
 
 /// Background thread: polls the config file and swaps it into the shared
 /// `RwLock` whenever its contents change, so edits apply live.
-pub fn watch_config(path: String, config: Arc<RwLock<RadialConfig>>) {
+///
+/// Every successful swap bumps `RadialConfig::generation`, letting consumers
+/// detect a changed module list. `on_reload` runs after each successful
+/// swap — used by the window controller to reset navigation state so stale
+/// indices can never address a differently-shaped tree.
+pub fn watch_config<F>(path: String, config: Arc<RwLock<RadialConfig>>, on_reload: F)
+where
+    F: Fn() + Send + 'static,
+{
     std::thread::spawn(move || {
         let mut last_contents: Option<String> = None;
         loop {
@@ -468,10 +544,16 @@ pub fn watch_config(path: String, config: Arc<RwLock<RadialConfig>>) {
                 if last_contents.as_deref() != Some(&contents) {
                     last_contents = Some(contents.clone());
                     match toml::from_str::<RadialConfig>(&contents) {
-                        Ok(cfg) => {
+                        Ok(mut cfg) => {
+                            let next_gen = config
+                                .read()
+                                .map(|c| c.generation.wrapping_add(1))
+                                .unwrap_or(1);
+                            cfg.generation = next_gen;
                             if let Ok(mut c) = config.write() {
                                 *c = cfg;
                             }
+                            on_reload();
                             println!("[CONFIG] Reloaded {path}");
                         }
                         Err(e) => println!("[CONFIG] Failed to parse {path}: {e}"),

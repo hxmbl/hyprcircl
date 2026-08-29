@@ -3,8 +3,10 @@
    (or next to wherever hyprcircl.toml lives) and edit freely. Changes apply
    live without restarting the daemon.
 
-   Colors accept hex (#rgb, #rgba, #rrggbb, #rrggbbaa), rgb()/rgba(),
-   hsl()/hsla(), or CSS color names. Sizes accept plain numbers, px, or pt.
+   Colors accept hex (#rgb, #rgba, #rrggbb, #rrggbbaa), rgb()/rgba()
+   (channels as standard 0-255 numbers, percentages, or the 0..1 floats used
+   throughout this file), hsl()/hsla(), or CSS color names. Sizes accept
+   plain numbers, px, or pt.
    ========================================================================= */
 
 /* --- Radial menu items ------------------------------------------------ */

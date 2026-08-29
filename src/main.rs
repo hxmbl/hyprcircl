@@ -25,20 +25,42 @@ mod process;
 mod theme;
 mod window;
 
-use crate::config::{find_config_path, find_css_path, load_config, watch_config, RadialConfig};
+use crate::config::{find_css_path, load_config_with_path, watch_config, RadialConfig};
 use crate::cursor::cursor_local_pos;
 use crate::draw::{
-    draw_rounded_sector, draw_top_bar, hit_test_pill, pango_measure, pango_show, pango_weight,
-    top_bar_layout,
+    draw_rounded_sector, draw_top_bar, hit_test_pill, pango_extents, pango_measure, pango_show,
+    pango_weight, top_bar_layout,
 };
 use crate::nav::{get_item_angles, hit_test_index, LevelSelection};
 use crate::process::{kill_process_group, run_shell};
 use crate::theme::{watch_theme, Theme};
 
+/// Directory for the single-instance socket: a per-user runtime directory
+/// when one exists (`XDG_RUNTIME_DIR`, then `TMPDIR` on macOS), falling back
+/// to the user-owned `~/.cache`. The world-writable `/tmp` is only used when
+/// even `HOME` is unavailable — a predictable path there would let any local
+/// user toggle or squat the daemon's socket.
+fn runtime_dir() -> Option<std::path::PathBuf> {
+    for var in ["XDG_RUNTIME_DIR", "TMPDIR"] {
+        if let Ok(dir) = std::env::var(var) {
+            if !dir.is_empty() {
+                return Some(std::path::PathBuf::from(dir));
+            }
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return Some(std::path::PathBuf::from(home).join(".cache"));
+        }
+    }
+    None
+}
+
 /// Path of the Unix socket used to signal a running instance to toggle.
 fn socket_path() -> std::path::PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(dir).join("hyprcircl.sock")
+    runtime_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("hyprcircl.sock")
 }
 
 #[cfg(test)]
@@ -46,20 +68,172 @@ mod tests {
     use super::*;
 
     #[test]
-    fn socket_path_uses_runtime_dir_or_tmp() {
-        // Falls back to /tmp when XDG_RUNTIME_DIR is unset.
-        std::env::remove_var("XDG_RUNTIME_DIR");
-        let p = socket_path();
-        assert_eq!(p.file_name().unwrap(), "hyprcircl.sock");
-        assert!(p.starts_with("/tmp") || p.starts_with("/run") || p.starts_with("/var"));
-
-        // Honours XDG_RUNTIME_DIR when present.
+    fn socket_path_uses_runtime_dir_or_private_fallback() {
+        let _guard = crate::config::env_lock();
+        // XDG_RUNTIME_DIR wins when present.
         std::env::set_var("XDG_RUNTIME_DIR", "/tmp/xdg");
         let p = socket_path();
         assert!(p.starts_with("/tmp/xdg"));
         assert_eq!(p.file_name().unwrap(), "hyprcircl.sock");
         std::env::remove_var("XDG_RUNTIME_DIR");
+
+        // Without it, TMPDIR (per-user on macOS) is honoured...
+        std::env::set_var("TMPDIR", "/tmp/user-tmp");
+        assert!(socket_path().starts_with("/tmp/user-tmp"));
+        std::env::remove_var("TMPDIR");
+
+        // ...then a user-owned ~/.cache instead of shared /tmp.
+        std::env::set_var("HOME", "/tmp/fake-home");
+        assert!(socket_path().starts_with("/tmp/fake-home/.cache"));
+        std::env::remove_var("HOME");
+
+        // Only with no environment at all does /tmp remain.
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        std::env::remove_var("TMPDIR");
+        std::env::remove_var("HOME");
+        assert_eq!(
+            socket_path(),
+            std::path::PathBuf::from("/tmp/hyprcircl.sock")
+        );
     }
+
+    #[test]
+    fn needs_shell_detects_metacharacters() {
+        assert!(!needs_shell(&["playerctl".into(), "play-pause".into()]));
+        assert!(!needs_shell(&["pamixer".into(), "-i".into(), "5".into()]));
+        assert!(needs_shell(&[
+            "grim".into(),
+            "-g".into(),
+            "$(slurp)".into(),
+            "-".into()
+        ]));
+        assert!(needs_shell(&["cliphist".into(), "list".into(), "|".into()]));
+        assert!(!needs_shell(&[
+            "omarchy-brightness-display".into(),
+            "+5%".into()
+        ]));
+    }
+}
+
+// =========================================================================
+// Fire-and-forget child bookkeeping
+// =========================================================================
+
+/// Every detached child spawned by input handlers is registered here and
+/// reaped by a periodic GTK timer, so repeated clicks/scrolls never leave
+/// zombie processes behind in the long-lived daemon.
+static SPAWNED: Mutex<Vec<std::process::Child>> = Mutex::new(Vec::new());
+
+fn spawn_tracked(cmd: &mut Command) -> bool {
+    match cmd.spawn() {
+        Ok(child) => {
+            if let Ok(mut queue) = SPAWNED.lock() {
+                queue.push(child);
+            }
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn reap_children() {
+    if let Ok(mut queue) = SPAWNED.lock() {
+        queue.retain_mut(|child| child.try_wait().map_or(true, |status| status.is_none()));
+    }
+}
+
+// =========================================================================
+// Command execution helpers
+// =========================================================================
+
+/// True when any argument carries shell syntax (`$(...)`, pipes, redirection,
+/// globs, quotes...) so the command must go through `sh -c` instead of raw
+/// argv execution.
+fn needs_shell(command: &[String]) -> bool {
+    command.iter().any(|arg| {
+        arg.chars().any(|c| {
+            matches!(
+                c,
+                '$' | '`'
+                    | '|'
+                    | ';'
+                    | '&'
+                    | '>'
+                    | '<'
+                    | '('
+                    | ')'
+                    | '*'
+                    | '?'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '~'
+                    | '\\'
+                    | '"'
+                    | '\''
+                    | '\n'
+            )
+        })
+    })
+}
+
+/// Execute a menu item's `command`. Plain argv lists exec directly (no
+/// quoting surprises); anything containing shell syntax is joined verbatim
+/// and handed to `sh -c`, so shipped entries like
+/// `["grim", "-g", "$(slurp)", "-"]` behave as written.
+fn spawn_menu_command(command: &[String]) {
+    if command.is_empty() {
+        return;
+    }
+    if needs_shell(command) {
+        let line = command.join(" ");
+        let _ = spawn_tracked(Command::new("sh").args(["-c", &line]));
+    } else {
+        let mut cmd = Command::new(&command[0]);
+        cmd.args(&command[1..]);
+        let _ = spawn_tracked(&mut cmd);
+    }
+}
+
+/// Run an applet shell snippet (pill click/scroll handlers).
+fn spawn_shell(cmd: &str) -> bool {
+    spawn_tracked(Command::new("sh").args(["-c", cmd]))
+}
+
+/// Render a command for display (notify_only mode): arguments containing
+/// whitespace or quotes are single-quoted so the notification stays readable.
+fn display_command(command: &[String]) -> String {
+    command
+        .iter()
+        .map(|arg| {
+            if arg
+                .chars()
+                .any(|c| c.is_whitespace() || c == '\'' || c == '"')
+            {
+                format!("'{arg}'")
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Switch Hyprland workspaces relative to the current one. No-op where
+/// `hyprctl` does not exist (macOS).
+#[cfg(target_os = "linux")]
+fn dispatch_workspace(direction: &str) {
+    let _ = spawn_tracked(Command::new("hyprctl").args(["dispatch", "workspace", direction]));
+}
+
+#[cfg(not(target_os = "linux"))]
+fn dispatch_workspace(_direction: &str) {}
+
+/// Exponential respawn backoff for failing stream commands: 500ms doubling,
+/// capped at 30s, so a dead stream never becomes a fork-per-100ms loop.
+fn stream_backoff(failures: u32) -> Duration {
+    Duration::from_millis((250u64.saturating_mul(1 << failures.min(7))).min(30_000))
 }
 
 /// Toggle: if another instance is already running, tell it to show/hide the
@@ -84,19 +258,23 @@ fn signal_toggle() -> bool {
 /// canvas center from the window's *actual* frame + cursor so the circle lands
 /// on the cursor even when the frame doesn't exactly cover the display.
 #[cfg(target_os = "macos")]
-fn recenter_under_cursor(window: &gtk4::ApplicationWindow, center: &RwLock<(f64, f64)>) {
+fn recenter_under_cursor(window: &gtk4::ApplicationWindow, center: &RwLock<Option<(f64, f64)>>) {
     if let Some(bounds) = window::macos_display_under_cursor() {
         window::macos_move_overlay_to(window, bounds);
     }
     if let Some(c) = window::macos_canvas_center_under_cursor(window) {
-        *center.write().unwrap() = c;
+        if let Ok(mut center) = center.write() {
+            *center = Some(c);
+        }
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn recenter_under_cursor(_window: &gtk4::ApplicationWindow, center: &RwLock<(f64, f64)>) {
+fn recenter_under_cursor(_window: &gtk4::ApplicationWindow, center: &RwLock<Option<(f64, f64)>>) {
     if let Some(pos) = cursor_local_pos() {
-        *center.write().unwrap() = pos;
+        if let Ok(mut center) = center.write() {
+            *center = Some(pos);
+        }
     }
 }
 
@@ -120,56 +298,84 @@ fn main() {
 fn build_window(app: &Application) {
     let window = ApplicationWindow::builder().application(app).build();
     window.add_css_class("hyprcircl");
-    let config: Arc<RwLock<RadialConfig>> = Arc::new(RwLock::new(load_config()));
 
-    // Reload the config automatically when the file changes on disk.
-    if let Some(path) = find_config_path() {
-        watch_config(path, config.clone());
-    }
-
-    window::init_overlay(&window);
-
-    let provider = CssProvider::new();
-    provider.load_from_data("window { background-color: transparent; }");
-    gtk4::style_context_add_provider_for_display(
-        &gdk::Display::default().unwrap(),
-        &provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-
-    // Shared theme: every visual property of the Cairo-drawn menu, seeded by
-    // `hyprcircl.css` in the config directory. Live-reloads on file changes.
-    let theme: Arc<RwLock<Theme>> = Arc::new(RwLock::new(Theme::default()));
-    if let Some(css_path) = find_css_path() {
-        println!("[CSS] Loading {css_path}");
-        if let Ok(css) = std::fs::read_to_string(&css_path) {
-            // Window/widget-level rules go through GTK's own CSS engine.
-            let user_provider = CssProvider::new();
-            user_provider.load_from_data(&css);
-            gtk4::style_context_add_provider_for_display(
-                &gdk::Display::default().unwrap(),
-                &user_provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-            // The rest of the file (`.item`, `.pill`, `.icon`, ...) drives our
-            // Cairo drawing via the typed Theme.
-            *theme.write().unwrap() = Theme::from_css(&css);
-        }
-        watch_theme(css_path, theme.clone());
-    }
-
-    // Stationary menu center, anchored at the cursor (falls back to screen center).
-    let (root_x, root_y) = cursor_local_pos().unwrap_or((0.0, 0.0));
-    let center_pos = Arc::new(RwLock::new((root_x, root_y)));
-
-    // Whether the menu is currently visible (toggled by the daemon socket).
-    let shown = Arc::new(AtomicBool::new(true));
-
+    // Navigation state exists up front so the config-watcher's reload hook
+    // can reset it (see below).
     let nav_stack = Arc::new(RwLock::new(vec![LevelSelection {
         selected_child_index: None,
         parent_mid_angle: 0.0,
     }]));
     let hover_index = Arc::new(RwLock::new(None::<usize>));
+
+    // Load the config and remember exactly which file won — the watcher must
+    // follow THAT file, not the first one that happens to exist on disk.
+    let (loaded_cfg, config_file) = load_config_with_path();
+    let config: Arc<RwLock<RadialConfig>> = Arc::new(RwLock::new(loaded_cfg));
+
+    // Reload the config automatically when the file changes on disk. Any
+    // live reload collapses navigation to the root so stale indices can
+    // never address a differently-shaped menu tree.
+    if let Some(path) = config_file.clone() {
+        let nav_r = nav_stack.clone();
+        let hover_r = hover_index.clone();
+        watch_config(path, config.clone(), move || {
+            if let Ok(mut stack) = nav_r.write() {
+                *stack = vec![LevelSelection {
+                    selected_child_index: None,
+                    parent_mid_angle: 0.0,
+                }];
+            }
+            if let Ok(mut hover) = hover_r.write() {
+                *hover = None;
+            }
+        });
+    }
+
+    window::init_overlay(&window);
+
+    // Shared theme: every visual property of the Cairo-drawn menu, seeded by
+    // `hyprcircl.css` in the config directory. Live-reloads on file changes.
+    let theme: Arc<RwLock<Theme>> = Arc::new(RwLock::new(Theme::default()));
+    if let Some(css_path) = find_css_path(config_file.as_deref()) {
+        println!("[CSS] Loading {css_path}");
+        if let Ok(css) = std::fs::read_to_string(&css_path) {
+            if let Some(display) = gdk::Display::default() {
+                // Window/widget-level rules go through GTK's own CSS engine.
+                let user_provider = CssProvider::new();
+                user_provider.load_from_data(&css);
+                gtk4::style_context_add_provider_for_display(
+                    &display,
+                    &user_provider,
+                    gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+            }
+            // The rest of the file (`.item`, `.pill`, `.icon`, ...) drives our
+            // Cairo drawing via the typed Theme.
+            if let Ok(mut t) = theme.write() {
+                *t = Theme::from_css(&css);
+            }
+        }
+        watch_theme(css_path, theme.clone());
+    }
+
+    // Transparent-window rule for GTK's CSS engine.
+    if let Some(display) = gdk::Display::default() {
+        let provider = CssProvider::new();
+        provider.load_from_data("window { background-color: transparent; }");
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+
+    // Stationary menu center, anchored at the cursor. `None` until a real
+    // cursor position is known — the renderer falls back to canvas center.
+    // (A literal `(0, 0)` cursor position must not double as "unset".)
+    let center_pos: Arc<RwLock<Option<(f64, f64)>>> = Arc::new(RwLock::new(cursor_local_pos()));
+
+    // Whether the menu is currently visible (toggled by the daemon socket).
+    let shown = Arc::new(AtomicBool::new(true));
 
     let canvas = DrawingArea::new();
 
@@ -214,19 +420,24 @@ fn build_window(app: &Application) {
         let shown_w = shown.clone();
         std::thread::spawn(move || {
             let mut caches: Vec<Vec<Option<Vec<u8>>>> = Vec::new();
+            let mut last_gen: u64 = 0;
             loop {
                 if !shown_w.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(150));
                     continue;
                 }
-                let modules = config_w
+                let (modules, gen) = config_w
                     .read()
-                    .map(|c| c.top_bar.modules.clone())
+                    .map(|c| (c.top_bar.modules.clone(), c.generation))
                     .unwrap_or_default();
                 let n = modules.len();
-                if caches.len() != n {
-                    caches.resize(n, Vec::new());
+                // Config changed on disk: drop the per-index caches so every
+                // watch file is re-read once under its new meaning.
+                if gen != last_gen {
+                    last_gen = gen;
+                    caches.clear();
                 }
+                caches.resize(n, Vec::new());
 
                 let mut dirty = vec![false; n];
                 for (i, m) in modules.iter().enumerate() {
@@ -277,6 +488,10 @@ fn build_window(app: &Application) {
         std::thread::spawn(move || {
             let mut last: Vec<Instant> = Vec::new();
             let mut streams: Vec<Option<std::process::Child>> = Vec::new();
+            // Per-stream respawn bookkeeping (see `stream_backoff`).
+            let mut fail_counts: Vec<u32> = Vec::new();
+            let mut next_try: Vec<Option<Instant>> = Vec::new();
+            let mut last_gen: u64 = 0;
             loop {
                 // SIGTERM/SIGINT: reap stream children, then die with the daemon.
                 if shutdown_w.load(Ordering::Relaxed) {
@@ -285,25 +500,51 @@ fn build_window(app: &Application) {
                             kill_process_group(&mut c);
                         }
                     }
+                    let _ = std::fs::remove_file(socket_path());
                     std::process::exit(0);
                 }
                 let shown = shown_w.load(Ordering::Relaxed);
-                let modules = config_w
+                let (modules, gen) = config_w
                     .read()
-                    .map(|c| c.top_bar.modules.clone())
+                    .map(|c| (c.top_bar.modules.clone(), c.generation))
                     .unwrap_or_default();
                 let n = modules.len();
+
+                // Config changed on disk: every index-keyed piece of state is
+                // stale. Drop streams/timers/outputs wholesale so the new
+                // module list rebuilds them instead of inheriting the old
+                // list's processes and text by position.
+                if gen != last_gen {
+                    last_gen = gen;
+                    for s in streams.iter_mut() {
+                        if let Some(mut c) = s.take() {
+                            kill_process_group(&mut c);
+                        }
+                    }
+                    streams.clear();
+                    last.clear();
+                    fail_counts.clear();
+                    next_try.clear();
+                    if let Ok(mut st) = state.lock() {
+                        st.clear();
+                    }
+                    if let Ok(mut f) = flags.lock() {
+                        f.clear();
+                    }
+                }
 
                 if let Ok(mut st) = state.lock() {
                     if st.len() != n {
                         st.resize(n, String::new());
                     }
                 }
-                if last.len() < n {
+                if last.len() != n {
                     let now = Instant::now();
                     let past = now.checked_sub(Duration::from_secs(3600)).unwrap_or(now);
                     last.resize(n, past);
                 }
+                fail_counts.resize(n, 0);
+                next_try.resize(n, None);
                 if streams.len() != n {
                     while streams.len() > n {
                         if let Some(mut c) = streams.pop().flatten() {
@@ -341,50 +582,82 @@ fn build_window(app: &Application) {
                 for (i, m) in modules.iter().enumerate() {
                     if !m.stream_command.is_empty() {
                         // PUSH MODE: manage the long-lived stream process.
+                        // A stream that exits immediately (typo, missing
+                        // binary, dead socket) must back off instead of being
+                        // respawned every 100ms tick.
+                        if let Some(t) = next_try[i] {
+                            if now < t {
+                                continue;
+                            }
+                        }
                         if let Some(mut child) = streams[i].take() {
                             match child.try_wait() {
-                                Ok(Some(_)) => { /* exited: respawn below */ }
+                                Ok(Some(_)) => {
+                                    // Exited: count as a failure and wait out
+                                    // the backoff before respawning.
+                                    fail_counts[i] = fail_counts[i].saturating_add(1);
+                                    next_try[i] = Some(now + stream_backoff(fail_counts[i]));
+                                    continue;
+                                }
                                 _ => {
                                     streams[i] = Some(child);
                                     continue;
                                 }
                             }
                         }
-                        if let Ok(mut child) = Command::new("setsid")
-                            .args(["sh", "-c", &m.stream_command])
-                            .stdout(Stdio::piped())
-                            .spawn()
+                        let mut cmd = Command::new("sh");
+                        cmd.args(["-c", &m.stream_command]);
+                        cmd.stdout(Stdio::piped());
+                        // Own process group (portable replacement for the
+                        // external `setsid` wrapper, which does not exist on
+                        // macOS): the child becomes its group leader so
+                        // `kill_process_group` can reap the whole pipeline.
+                        #[cfg(unix)]
                         {
-                            if let Some(stdout) = child.stdout.take() {
-                                let state_r = state.clone();
-                                let idx = i;
-                                std::thread::spawn(move || {
-                                    let mut reader = std::io::BufReader::new(stdout);
-                                    let mut line = String::new();
-                                    loop {
-                                        line.clear();
-                                        match reader.read_line(&mut line) {
-                                            Ok(0) | Err(_) => break,
-                                            Ok(_) => {
-                                                let out = line.trim().to_string();
-                                                if let Ok(mut st) = state_r.lock() {
-                                                    if idx < st.len() {
-                                                        st[idx] = out;
+                            use std::os::unix::process::CommandExt;
+                            cmd.process_group(0);
+                        }
+                        match cmd.spawn() {
+                            Ok(mut child) => {
+                                fail_counts[i] = 0;
+                                next_try[i] = None;
+                                if let Some(stdout) = child.stdout.take() {
+                                    let state_r = state.clone();
+                                    let idx = i;
+                                    std::thread::spawn(move || {
+                                        let mut reader = std::io::BufReader::new(stdout);
+                                        let mut line = String::new();
+                                        loop {
+                                            line.clear();
+                                            match reader.read_line(&mut line) {
+                                                Ok(0) | Err(_) => break,
+                                                Ok(_) => {
+                                                    let out = line.trim().to_string();
+                                                    if let Ok(mut st) = state_r.lock() {
+                                                        if idx < st.len() {
+                                                            st[idx] = out;
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
-                                    }
-                                });
+                                    });
+                                }
+                                streams[i] = Some(child);
                             }
-                            streams[i] = Some(child);
+                            Err(_) => {
+                                fail_counts[i] = fail_counts[i].saturating_add(1);
+                                next_try[i] = Some(now + stream_backoff(fail_counts[i]));
+                            }
                         }
                     } else {
                         // Kill a leftover stream if the config switched modes.
                         if let Some(mut c) = streams[i].take() {
                             kill_process_group(&mut c);
                         }
-                        let due = now.duration_since(last[i]).as_secs() >= m.interval;
+                        // Clamp to >= 1s: interval = 0 would otherwise spawn
+                        // the command on every 100ms loop tick.
+                        let due = now.duration_since(last[i]).as_secs() >= m.interval.max(1);
                         if due || refresh[i] {
                             last[i] = now;
                             if m.command.is_empty() {
@@ -429,17 +702,33 @@ fn build_window(app: &Application) {
             Err(_) => return,
         };
 
-        let (mut cx, mut cy) = *center_draw.read().unwrap();
-        if cx == 0.0 && cy == 0.0 {
-            cx = width as f64 / 2.0;
-            cy = height as f64 / 2.0;
-            *center_draw.write().unwrap() = (cx, cy);
-        }
+        // Resolve the menu center. `None` means "no cursor fix yet" — fall
+        // back to canvas center once and remember it. A genuine cursor at
+        // (0, 0) is a real position and stays put.
+        let (cx, cy) = {
+            let current = center_draw.read().ok().and_then(|c| *c);
+            match current {
+                Some(c) => c,
+                None => {
+                    let fallback = (width as f64 / 2.0, height as f64 / 2.0);
+                    if let Ok(mut center) = center_draw.write() {
+                        *center = Some(fallback);
+                    }
+                    fallback
+                }
+            }
+        };
 
-        let stack = nav.read().unwrap();
+        let stack = match nav.read() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
         if stack.is_empty() {
             return;
         }
+
+        // Read hover state once per frame instead of once per wedge.
+        let hover = h_idx.read().ok().and_then(|h| *h);
 
         // ===== TOP PILL =====
         // Renders only at the root menu (nav stack depth == 1).
@@ -479,7 +768,7 @@ fn build_window(app: &Application) {
                 // itself -> active; everything else -> default.
                 let color = if selected_child == Some(i) {
                     theme.item_selected
-                } else if is_active_level && *h_idx.read().unwrap() == Some(i) {
+                } else if is_active_level && hover == Some(i) {
                     theme.item_hover
                 } else if is_active_level {
                     theme.item_active
@@ -504,11 +793,13 @@ fn build_window(app: &Application) {
                 let icon_c = theme.icon_color;
                 cr.set_source_rgba(icon_c.0, icon_c.1, icon_c.2, icon_c.3);
 
-                // Center icon in wedge
+                // Center icon in wedge using its measured extents so the
+                // offsets hold for any font size.
                 let icon_size = (theme.icon_font_size * pango::SCALE as f64) as i32;
                 let icon_weight = pango_weight(theme.icon_font_weight);
-                let icon_w = pango_measure(&theme.icon_font, icon_size, icon_weight, &item.icon);
-                cr.move_to(tx - icon_w / 2.0, ty - 12.0);
+                let (icon_w, icon_h) =
+                    pango_extents(&theme.icon_font, icon_size, icon_weight, &item.icon);
+                cr.move_to(tx - icon_w / 2.0, ty - icon_h / 2.0 - 3.0);
                 pango_show(cr, &theme.icon_font, icon_size, icon_weight, &item.icon);
 
                 // Label below icon (smaller to avoid overflow).
@@ -520,7 +811,7 @@ fn build_window(app: &Application) {
                     let label_weight = pango_weight(theme.label_font_weight);
                     let label_w =
                         pango_measure(&theme.label_font, label_size, label_weight, &item.label);
-                    cr.move_to(tx - label_w / 2.0, ty + 10.0);
+                    cr.move_to(tx - label_w / 2.0, ty + icon_h / 2.0 + 1.0);
                     pango_show(cr, &theme.label_font, label_size, label_weight, &item.label);
                 }
             }
@@ -556,11 +847,16 @@ fn build_window(app: &Application) {
             Ok(c) => c,
             Err(_) => return,
         };
-        let stack = nav_m.read().unwrap();
+        let stack = match nav_m.read() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
         if stack.is_empty() {
             return;
         }
-        let (cx, cy) = *center_m.read().unwrap();
+        let Some((cx, cy)) = center_m.read().ok().and_then(|c| *c) else {
+            return;
+        };
         let current_level = stack.len() - 1;
 
         // Traverse the config tree to the active level's items.
@@ -597,11 +893,30 @@ fn build_window(app: &Application) {
             None
         };
 
-        if *h_m.read().unwrap() != new_hover {
-            *h_m.write().unwrap() = new_hover;
+        let changed = h_m.read().map(|h| *h != new_hover).unwrap_or(false);
+        if changed {
+            if let Ok(mut hover) = h_m.write() {
+                *hover = new_hover;
+            }
             cv_m.queue_draw();
         }
     });
+
+    // Pointer left the canvas: drop any stale highlight so a wedge on the
+    // active ring can't stay lit while the cursor is elsewhere.
+    {
+        let h_l = hover_index.clone();
+        let cv_l = canvas.clone();
+        motion.connect_leave(move |_| {
+            let had_hover = h_l.read().map(|h| h.is_some()).unwrap_or(false);
+            if had_hover {
+                if let Ok(mut hover) = h_l.write() {
+                    *hover = None;
+                }
+                cv_l.queue_draw();
+            }
+        });
+    }
     canvas.add_controller(motion);
 
     // --- Primary Click Controller (left button only) ---
@@ -633,8 +948,10 @@ fn build_window(app: &Application) {
         // further modules can be used.
         let is_root = nav_c.read().map(|s| s.len() == 1).unwrap_or(false);
         if is_root && cfg.top_bar.enabled {
+            let Some((cx, cy)) = center_c.read().ok().and_then(|c| *c) else {
+                return;
+            };
             let outputs = bar_state_c.lock().map(|s| s.clone()).unwrap_or_default();
-            let (cx, cy) = *center_c.read().unwrap();
             if let Some(layout) =
                 top_bar_layout(&cfg.top_bar, &theme, cfg.outer_radius, &outputs, cx, cy)
             {
@@ -642,16 +959,21 @@ fn build_window(app: &Application) {
                     let cmd = cfg.top_bar.modules[idx].on_click.clone();
                     if !cmd.is_empty() {
                         drop(cfg);
-                        let _ = Command::new("sh").args(["-c", &cmd]).spawn();
+                        spawn_shell(&cmd);
                     }
                     return;
                 }
             }
         }
 
-        let mut stack = nav_c.write().unwrap();
+        let mut stack = match nav_c.write() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
         let current_level = stack.len() - 1;
-        let (cx, cy) = *center_c.read().unwrap();
+        let Some((cx, cy)) = center_c.read().ok().and_then(|c| *c) else {
+            return;
+        };
 
         let mut items = &cfg.items;
         for i in 0..current_level {
@@ -697,7 +1019,9 @@ fn build_window(app: &Application) {
                         parent_mid_angle: mid_angle,
                     });
 
-                    *h_c.write().unwrap() = None;
+                    if let Ok(mut hover) = h_c.write() {
+                        *hover = None;
+                    }
                     cv_c.queue_draw();
                 } else {
                     // ACTION: either notify (safety mode) or execute the real command.
@@ -707,11 +1031,14 @@ fn build_window(app: &Application) {
                     drop(stack);
                     drop(cfg);
                     if notify_only {
-                        let _ = Command::new("notify-send")
-                            .args(["-a", "hyprcircl", &label, &command.join(" ")])
-                            .spawn();
-                    } else if !command.is_empty() {
-                        let _ = Command::new(&command[0]).args(&command[1..]).spawn();
+                        let _ = spawn_tracked(Command::new("notify-send").args([
+                            "-a",
+                            "hyprcircl",
+                            &label,
+                            &display_command(&command),
+                        ]));
+                    } else {
+                        spawn_menu_command(&command);
                     }
                     shown_c.store(false, Ordering::Relaxed);
                     win_c.hide();
@@ -724,9 +1051,12 @@ fn build_window(app: &Application) {
                 if let Some(parent) = stack.last_mut() {
                     parent.selected_child_index = None;
                 }
-                *h_c.write().unwrap() = None;
+                if let Ok(mut hover) = h_c.write() {
+                    *hover = None;
+                }
                 cv_c.queue_draw();
             } else {
+                // Release locks before driving widget state.
                 drop(stack);
                 drop(cfg);
                 shown_c.store(false, Ordering::Relaxed);
@@ -762,8 +1092,10 @@ fn build_window(app: &Application) {
         // Top-pill module right-click runs its `on_click_right` applet command.
         let is_root = nav_r.read().map(|s| s.len() == 1).unwrap_or(false);
         if is_root && cfg.top_bar.enabled {
+            let Some((cx, cy)) = center_r.read().ok().and_then(|c| *c) else {
+                return;
+            };
             let outputs = bar_state_r.lock().map(|s| s.clone()).unwrap_or_default();
-            let (cx, cy) = *center_r.read().unwrap();
             if let Some(layout) =
                 top_bar_layout(&cfg.top_bar, &theme, cfg.outer_radius, &outputs, cx, cy)
             {
@@ -771,7 +1103,7 @@ fn build_window(app: &Application) {
                     let cmd = cfg.top_bar.modules[idx].on_click_right.clone();
                     if !cmd.is_empty() {
                         drop(cfg);
-                        let _ = Command::new("sh").args(["-c", &cmd]).spawn();
+                        spawn_shell(&cmd);
                     }
                     return;
                 }
@@ -779,13 +1111,18 @@ fn build_window(app: &Application) {
         }
         drop(cfg);
 
-        let mut stack = nav_r.write().unwrap();
+        let mut stack = match nav_r.write() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
         if stack.len() > 1 {
             stack.pop();
             if let Some(parent) = stack.last_mut() {
                 parent.selected_child_index = None;
             }
-            *h_r.write().unwrap() = None;
+            if let Ok(mut hover) = h_r.write() {
+                *hover = None;
+            }
             cv_r.queue_draw();
         } else {
             drop(stack);
@@ -799,37 +1136,41 @@ fn build_window(app: &Application) {
     let key = EventControllerKey::new();
     let win_k = window.clone();
     let nav_k = nav_stack.clone();
+    let h_k = hover_index.clone();
     let cv_k = canvas.clone();
     let shown_k = shown.clone();
 
     key.connect_key_pressed(move |_, keyval, _, _| {
         match keyval {
             Key::Escape => {
-                let mut stack = nav_k.write().unwrap();
-                if stack.len() > 1 {
-                    stack.pop();
-                    if let Some(parent) = stack.last_mut() {
-                        parent.selected_child_index = None;
+                // Popping a level must clear hover too: the stored index came
+                // from the popped ring and would light the wrong wedge on the
+                // newly active one until the pointer moved.
+                if let Ok(mut stack) = nav_k.write() {
+                    if stack.len() > 1 {
+                        stack.pop();
+                        if let Some(parent) = stack.last_mut() {
+                            parent.selected_child_index = None;
+                        }
+                        if let Ok(mut hover) = h_k.write() {
+                            *hover = None;
+                        }
+                        cv_k.queue_draw();
+                    } else {
+                        drop(stack);
+                        shown_k.store(false, Ordering::Relaxed);
+                        win_k.hide();
                     }
-                    cv_k.queue_draw();
-                } else {
-                    drop(stack);
-                    shown_k.store(false, Ordering::Relaxed);
-                    win_k.hide();
                 }
                 Propagation::Stop
             }
             // Workspace controls: Page_Up = next, Page_Down = previous.
             Key::Page_Up => {
-                let _ = Command::new("hyprctl")
-                    .args(["dispatch", "workspace", "+1"])
-                    .spawn();
+                dispatch_workspace("+1");
                 Propagation::Stop
             }
             Key::Page_Down => {
-                let _ = Command::new("hyprctl")
-                    .args(["dispatch", "workspace", "-1"])
-                    .spawn();
+                dispatch_workspace("-1");
                 Propagation::Stop
             }
             _ => Propagation::Proceed,
@@ -849,6 +1190,7 @@ fn build_window(app: &Application) {
     scroll.connect_scroll(move |_, _dx, dy| {
         // If the pointer is over a pill module with scroll handlers, dispatch
         // those instead of switching workspaces (Waybar `on-scroll-*`).
+        // GTK4 scroll deltas: dy < 0 = wheel UP, dy > 0 = wheel DOWN.
         let pos = last_pos_s.get();
         let cfg = match cfg_s.read() {
             Ok(c) => c,
@@ -860,20 +1202,22 @@ fn build_window(app: &Application) {
         };
         let is_root = nav_s.read().map(|s| s.len() == 1).unwrap_or(false);
         if is_root && cfg.top_bar.enabled {
+            let Some((cx, cy)) = center_s.read().ok().and_then(|c| *c) else {
+                return Propagation::Proceed;
+            };
             let outputs = bar_state_s.lock().map(|s| s.clone()).unwrap_or_default();
-            let (cx, cy) = *center_s.read().unwrap();
             if let Some(layout) =
                 top_bar_layout(&cfg.top_bar, &theme, cfg.outer_radius, &outputs, cx, cy)
             {
                 if let Some(idx) = hit_test_pill(&layout, pos.0, pos.1) {
-                    let cmd = if dy > 0.0 {
+                    let cmd = if dy < 0.0 {
                         cfg.top_bar.modules[idx].on_scroll_up.clone()
                     } else {
                         cfg.top_bar.modules[idx].on_scroll_down.clone()
                     };
                     if !cmd.is_empty() {
                         drop(cfg);
-                        let _ = Command::new("sh").args(["-c", &cmd]).spawn();
+                        spawn_shell(&cmd);
                         return Propagation::Stop;
                     }
                 }
@@ -883,14 +1227,10 @@ fn build_window(app: &Application) {
 
         let mut a = acc.get() + dy;
         if a >= 15.0 {
-            let _ = Command::new("hyprctl")
-                .args(["dispatch", "workspace", "+1"])
-                .spawn();
+            dispatch_workspace("+1");
             a = 0.0;
         } else if a <= -15.0 {
-            let _ = Command::new("hyprctl")
-                .args(["dispatch", "workspace", "-1"])
-                .spawn();
+            dispatch_workspace("-1");
             a = 0.0;
         }
         acc.set(a);
@@ -906,6 +1246,13 @@ fn build_window(app: &Application) {
     // cursor probe, no cold modules) while preserving all behaviour.
     let toggle_pending = Arc::new(AtomicBool::new(false));
     if let Ok(listener) = UnixListener::bind(socket_path()) {
+        // Restrict the socket to its owner: without this the file inherits
+        // the umask and any local user could connect to toggle the menu.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(socket_path(), std::fs::Permissions::from_mode(0o600));
+        }
         let pending = toggle_pending.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -916,10 +1263,23 @@ fn build_window(app: &Application) {
             }
         });
     } else {
-        // Failed to bind (another daemon won the race): toggle it and exit.
+        // Failed to bind: either another daemon won the race (toggle it and
+        // exit) or a foreign/stale socket file owns the path (keep running,
+        // but say so — single-instance toggling is broken until it's gone).
+        eprintln!("[SOCKET] could not bind {}", socket_path().display());
         if signal_toggle() {
             std::process::exit(0);
         }
+        eprintln!("[SOCKET] no live daemon answered; running without single-instance toggle");
+    }
+
+    // Reap finished fire-and-forget children so clicks/scrolls never leave
+    // zombies behind.
+    {
+        timeout_add_local(Duration::from_millis(500), move || {
+            reap_children();
+            ControlFlow::Continue
+        });
     }
 
     // Fast main-loop poller that applies pending toggles.
@@ -940,11 +1300,15 @@ fn build_window(app: &Application) {
                 } else {
                     // Reopen: recenter at the cursor and reset navigation.
                     shown_t.store(true, Ordering::Relaxed);
-                    *nav_t.write().unwrap() = vec![LevelSelection {
-                        selected_child_index: None,
-                        parent_mid_angle: 0.0,
-                    }];
-                    *hover_t.write().unwrap() = None;
+                    if let Ok(mut stack) = nav_t.write() {
+                        *stack = vec![LevelSelection {
+                            selected_child_index: None,
+                            parent_mid_angle: 0.0,
+                        }];
+                    }
+                    if let Ok(mut hover) = hover_t.write() {
+                        *hover = None;
+                    }
                     window::set_keyboard_exclusive(&win_t, true);
                     canvas_t.queue_draw();
                     win_t.present();

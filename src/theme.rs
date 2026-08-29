@@ -201,7 +201,10 @@ fn tokenize(s: &str) -> Vec<Tok> {
                 out.push(Tok::Comma);
                 i += 1;
             }
-            '.' => {
+            // A `.` followed by a digit is a leading-dot decimal (`.5px`) and
+            // must fall through to the number scanner below, not become a
+            // selector Dot token.
+            '.' if !(i + 1 < b.len() && (b[i + 1] as char).is_ascii_digit()) => {
                 out.push(Tok::Dot);
                 i += 1;
             }
@@ -225,22 +228,32 @@ fn tokenize(s: &str) -> Vec<Tok> {
                 i += 1;
                 let mut val = String::new();
                 while i < b.len() {
-                    let ch = b[i] as char;
+                    // Decode one full UTF-8 scalar so non-ASCII font names
+                    // survive instead of being mangled byte-by-byte.
+                    let ch = s[i..].chars().next().unwrap();
                     if ch == '\\' && i + 1 < b.len() {
-                        val.push(b[i + 1] as char);
-                        i += 2;
+                        let esc = s[i + 1..].chars().next().unwrap();
+                        val.push(esc);
+                        i += 1 + esc.len_utf8();
                     } else if ch == q {
                         i += 1;
                         break;
                     } else {
                         val.push(ch);
-                        i += 1;
+                        i += ch.len_utf8();
                     }
                 }
                 out.push(Tok::Str(val));
             }
             c if c.is_ascii_digit()
-                || (c == '-' && i + 1 < b.len() && (b[i + 1] as char).is_ascii_digit()) =>
+                // `-5`, `-.5`: sign must be followed by a number start.
+                || (c == '-'
+                    && i + 1 < b.len()
+                    && ((b[i + 1] as char).is_ascii_digit()
+                        || (b[i + 1] as char == '.'
+                            && i + 2 < b.len()
+                            && (b[i + 2] as char).is_ascii_digit())))
+                || (c == '.' && i + 1 < b.len() && (b[i + 1] as char).is_ascii_digit()) =>
             {
                 let start = i;
                 if c == '-' {
@@ -472,7 +485,7 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
                 }
             }
             "font-family" => {
-                if let Some(f) = ident_str(vals) {
+                if let Some(f) = font_family(vals) {
                     theme.pill_font = f;
                 }
             }
@@ -549,7 +562,7 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
                 }
             }
             "font-family" => {
-                if let Some(f) = ident_str(vals) {
+                if let Some(f) = font_family(vals) {
                     theme.icon_font = f;
                 }
             }
@@ -572,7 +585,7 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
                 }
             }
             "font-family" => {
-                if let Some(f) = ident_str(vals) {
+                if let Some(f) = font_family(vals) {
                     theme.label_font = f;
                 }
             }
@@ -608,15 +621,20 @@ fn number(vals: &[Tok]) -> Option<f64> {
     None
 }
 
-/// First font-family value (string or identifier).
-fn ident_str(vals: &[Tok]) -> Option<String> {
+/// First font-family value: a quoted string is used verbatim; unquoted
+/// multi-word families ("JetBrains Mono") are joined until the list ends
+/// or the next comma-separated family starts.
+fn font_family(vals: &[Tok]) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
     for t in vals {
         match t {
-            Tok::Str(s) | Tok::Ident(s) => return Some(s.clone()),
+            Tok::Str(s) => return Some(s.clone()),
+            Tok::Ident(s) => parts.push(s.as_str()),
+            Tok::Comma | Tok::Number(_) | Tok::Dimension(..) | Tok::Percentage(_) => break,
             _ => {}
         }
     }
-    None
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 fn weight(vals: &[Tok]) -> Option<i32> {
@@ -657,30 +675,32 @@ fn parse_color(vals: &[Tok]) -> Option<Rgba> {
             }
             Tok::Function(name) => {
                 let upper = name.to_ascii_uppercase();
-                let nums = numeric_components(vals);
+                let nums = value_components(vals);
+                // Alpha: percentage or 0..1 float (CSS never uses 0-255 here).
+                let alpha = |nums: &[(f64, bool)]| -> f64 {
+                    match nums.get(3) {
+                        Some((v, true)) => (*v / 100.0).clamp(0.0, 1.0),
+                        Some((v, false)) => v.clamp(0.0, 1.0),
+                        None => 1.0,
+                    }
+                };
                 return match upper.as_str() {
-                    "RGB" | "RGBA" if nums.len() >= 3 => Some((
-                        component(nums[0]),
-                        component(nums[1]),
-                        component(nums[2]),
-                        if nums.len() >= 4 {
-                            component(nums[3])
-                        } else {
-                            1.0
-                        },
-                    )),
-                    "HSL" | "HSLA" if nums.len() >= 3 => {
-                        let (r, g, b) = hsl_to_rgb(nums[0], nums[1], nums[2]);
-                        Some((
-                            r,
-                            g,
-                            b,
-                            if nums.len() >= 4 {
-                                component(nums[3])
+                    "RGB" | "RGBA" if nums.len() >= 3 => {
+                        // Channels honour percentages; plain numbers accept
+                        // both the 0-255 CSS range and the 0..1 float range.
+                        let chan = |i: usize| -> f64 {
+                            let (v, pct) = nums[i];
+                            if pct {
+                                (v / 100.0).clamp(0.0, 1.0)
                             } else {
-                                1.0
-                            },
-                        ))
+                                channel(v)
+                            }
+                        };
+                        Some((chan(0), chan(1), chan(2), alpha(&nums)))
+                    }
+                    "HSL" | "HSLA" if nums.len() >= 3 => {
+                        let (r, g, b) = hsl_to_rgb(nums[0].0, nums[1].0, nums[2].0);
+                        Some((r, g, b, alpha(&nums)))
                     }
                     _ => None,
                 };
@@ -691,43 +711,48 @@ fn parse_color(vals: &[Tok]) -> Option<Rgba> {
     None
 }
 
-/// Every numeric component in a declaration (used for function arguments).
-/// Percentages are kept as raw numbers and normalized in `component`.
-fn numeric_components(vals: &[Tok]) -> Vec<f64> {
+/// Every numeric component in a declaration, paired with whether it was
+/// written as a percentage (used for function arguments).
+fn value_components(vals: &[Tok]) -> Vec<(f64, bool)> {
     vals.iter()
         .filter_map(|t| match t {
-            Tok::Number(v) | Tok::Dimension(v, _) | Tok::Percentage(v) => Some(*v),
+            Tok::Number(v) => Some((*v, false)),
+            Tok::Dimension(v, _) => Some((*v, false)),
+            Tok::Percentage(v) => Some((*v, true)),
             _ => None,
         })
         .collect()
 }
 
-/// Normalize a color channel: 0..1 values pass through, percentages
-/// (0..100) divide by 100.
-fn component(v: f64) -> f64 {
-    if v > 1.0 { v / 100.0 } else { v }.clamp(0.0, 1.0)
+/// Normalize an RGB channel. Accepts both standard CSS 0–255 numbers
+/// (`rgb(200, 150, 100)`) and the 0..1 float convention used by the
+/// shipped theme (`rgba(0.85, 0.85, 0.88, 0.90)`): values ≤ 1 pass
+/// through, larger values are scaled down from the 255 range.
+fn channel(v: f64) -> f64 {
+    if v > 1.0 {
+        (v / 255.0).clamp(0.0, 1.0)
+    } else {
+        v.clamp(0.0, 1.0)
+    }
 }
 
 fn parse_hex(s: &str) -> Option<Rgba> {
     let b = s.as_bytes();
-    let nibble = |c: u8| -> f64 { (c as char).to_digit(16).unwrap_or(0) as f64 / 15.0 };
-    let byte = |pair: &[u8]| -> f64 {
-        let (a, c) = (pair[0] as char, pair[1] as char);
-        let v = a
-            .to_digit(16)
-            .and_then(|x| c.to_digit(16).map(|y| x * 16 + y))
-            .unwrap_or(0);
-        v as f64 / 255.0
+    let nibble = |c: u8| -> Option<f64> { (c as char).to_digit(16).map(|d| d as f64 / 15.0) };
+    let byte = |pair: &[u8]| -> Option<f64> {
+        let hi = (pair[0] as char).to_digit(16)?;
+        let lo = (pair[1] as char).to_digit(16)?;
+        Some((hi * 16 + lo) as f64 / 255.0)
     };
     match b.len() {
-        3 => Some((nibble(b[0]), nibble(b[1]), nibble(b[2]), 1.0)),
-        4 => Some((nibble(b[0]), nibble(b[1]), nibble(b[2]), nibble(b[3]))),
-        6 => Some((byte(&b[0..2]), byte(&b[2..4]), byte(&b[4..6]), 1.0)),
+        3 => Some((nibble(b[0])?, nibble(b[1])?, nibble(b[2])?, 1.0)),
+        4 => Some((nibble(b[0])?, nibble(b[1])?, nibble(b[2])?, nibble(b[3])?)),
+        6 => Some((byte(&b[0..2])?, byte(&b[2..4])?, byte(&b[4..6])?, 1.0)),
         8 => Some((
-            byte(&b[0..2]),
-            byte(&b[2..4]),
-            byte(&b[4..6]),
-            byte(&b[6..8]),
+            byte(&b[0..2])?,
+            byte(&b[2..4])?,
+            byte(&b[4..6])?,
+            byte(&b[6..8])?,
         )),
         _ => None,
     }
@@ -999,5 +1024,74 @@ mod tests {
         let t = Theme::from_css(css);
         assert_eq!(t.icon_font_weight, 400);
         assert_eq!(t.label_font_weight, 700);
+    }
+
+    #[test]
+    fn rgb_accepts_0_255_and_0_1_channels() {
+        // Standard CSS 8-bit channels must not saturate.
+        assert!(approx(
+            parse_color(&[
+                Tok::Function("rgb".into()),
+                Tok::Number(200.0),
+                Tok::Comma,
+                Tok::Number(150.0),
+                Tok::Comma,
+                Tok::Number(100.0),
+            ])
+            .unwrap(),
+            (200.0 / 255.0, 150.0 / 255.0, 100.0 / 255.0, 1.0)
+        ));
+        // The shipped theme's float convention keeps passing through.
+        assert!(approx(
+            parse_color(&[
+                Tok::Function("rgba".into()),
+                Tok::Number(0.85),
+                Tok::Comma,
+                Tok::Number(0.85),
+                Tok::Comma,
+                Tok::Number(0.88),
+                Tok::Comma,
+                Tok::Number(0.90),
+            ])
+            .unwrap(),
+            (0.85, 0.85, 0.88, 0.90)
+        ));
+        // Percentages still work.
+        assert!(approx(
+            parse_color(&[
+                Tok::Function("rgb".into()),
+                Tok::Percentage(50.0),
+                Tok::Comma,
+                Tok::Number(0.0),
+                Tok::Comma,
+                Tok::Number(0.0),
+            ])
+            .unwrap(),
+            (0.5, 0.0, 0.0, 1.0)
+        ));
+    }
+
+    #[test]
+    fn hex_rejects_invalid_digits() {
+        assert_eq!(parse_hex("ggg"), None);
+        assert_eq!(parse_hex("ff00zz"), None);
+    }
+
+    #[test]
+    fn leading_dot_decimals_parse_at_fractional_value() {
+        // `.5px` is valid CSS; it must not become `5px` (10x error).
+        let t = Theme::from_css(".item { border-radius: .5px; }");
+        assert!((t.item_corner - 0.5).abs() < 1e-9);
+        let t = Theme::from_css(".item-stroke { border-width: -.25px; }");
+        assert!((t.item_stroke_width + 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unquoted_multiword_font_family_is_joined() {
+        let t = Theme::from_css(".icon { font-family: JetBrains Mono; }");
+        assert_eq!(t.icon_font, "JetBrains Mono");
+        // First family of a comma list wins.
+        let t = Theme::from_css(".pill { font-family: JetBrains Mono, sans-serif; }");
+        assert_eq!(t.pill_font, "JetBrains Mono");
     }
 }

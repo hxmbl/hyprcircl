@@ -46,12 +46,15 @@ pub fn cursor_local_pos() -> Option<(f64, f64)> {
                         if let Ok(mv) = serde_json::from_str::<serde_json::Value>(&m_res) {
                             if let Some(mons) = mv.as_array() {
                                 for mon in mons {
-                                    let mx = mon.get("x").and_then(|n| n.as_f64())?;
-                                    let my = mon.get("y").and_then(|n| n.as_f64())?;
-                                    let mw = mon.get("width").and_then(|n| n.as_f64())?;
-                                    let mh = mon.get("height").and_then(|n| n.as_f64())?;
-                                    if mx <= x && x < mx + mw && my <= y && y < my + mh {
-                                        return Some((x - mx, y - my));
+                                    // A malformed entry must only skip that
+                                    // monitor, never abort the whole query.
+                                    let get = |k: &str| mon.get(k).and_then(|n| n.as_f64());
+                                    if let (Some(mx), Some(my), Some(mw), Some(mh)) =
+                                        (get("x"), get("y"), get("width"), get("height"))
+                                    {
+                                        if mx <= x && x < mx + mw && my <= y && y < my + mh {
+                                            return Some((x - mx, y - my));
+                                        }
                                     }
                                 }
                             }

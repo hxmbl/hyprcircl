@@ -128,7 +128,7 @@ Each `[[items]]` entry is a `MenuItem`:
 | --- | ---- | ----------- |
 | `label` | string | Text shown under the icon. |
 | `icon` | string | Glyph shown in the wedge (typically a Nerd Font icon). |
-| `command` | array of strings | Executed on click. Empty for submenu parents. |
+| `command` | array of strings | Executed on click. Empty for submenu parents. Entries are exec'd directly as argv; if any entry contains shell syntax (`$(...)`, `\|`, `;`, `&`, redirects, globs), the whole list is joined and run via `sh -c`, so `["grim", "-g", "$(slurp)", "-"]` works as written. |
 | `items` | array of `MenuItem` | Child items; a non-empty list makes this a submenu. |
 
 Nesting is recursive — a child can itself contain `items` for deeper submenus.
@@ -157,15 +157,15 @@ Each `[[top_bar.modules]]` is a Waybar-style module:
 | Key | Type | Description |
 | --- | ---- | ----------- |
 | `command` | string | Shell command whose stdout becomes the module text. |
-| `interval` | int | Refresh interval in seconds. |
-| `format` | string | `{output}` is replaced with the command output; `ICON_UPDATE` and similar are special-cased. |
+| `interval` | int | Refresh interval in seconds (minimum 1). |
+| `format` | string | `{output}` is replaced with the command output. A format *without* `{output}` renders literally, but only while the command produces output — e.g. `format = "ICON_UPDATE"` shows the glyph only when an update check prints something. |
 | `icon` | string | Optional leading glyph. |
-| `stream_command` | string | Long-lived push command; each stdout line updates the module (no interval polling). Used for the Hyprland event socket, `pactl subscribe`, etc. |
+| `stream_command` | string | Long-lived push command; each stdout line updates the module (no interval polling). Used for the Hyprland event socket, `pactl subscribe`, etc. A stream that dies is respawned with exponential backoff. |
 | `watch` | array of strings | File paths (e.g. sysfs nodes) whose changes re-run `command` immediately. |
 | `on_click` | string | Shell command on left click. |
 | `on_click_right` | string | Shell command on right click. |
-| `on_scroll_up` | string | Shell command on scroll up. |
-| `on_scroll_down` | string | Shell command on scroll down. |
+| `on_scroll_up` | string | Shell command on scroll up (wheel up). |
+| `on_scroll_down` | string | Shell command on scroll down (wheel down). |
 
 ## Theming (CSS)
 
@@ -185,9 +185,10 @@ Supported selectors:
 - `.pill` — the status pill (`background-color`, `color`, `height`, `padding`,
   `margin-top`, `border-radius`, `font-*`, and `--module-gap` for spacing)
 
-Colors accept `#rgb` / `#rrggbb` / `#rrggbbaa`, `rgb()` / `rgba()`,
-`hsl()` / `hsla()`, or CSS color names. Sizes accept plain numbers, `px`, or
-`pt`.
+Colors accept `#rgb` / `#rrggbb` / `#rrggbbaa`, `rgb()` / `rgba()` (channels as
+standard 0–255 numbers, percentages, or the 0..1 floats used by the shipped
+theme), `hsl()` / `hsla()`, or CSS color names. Sizes accept plain numbers,
+`px`, or `pt` (leading-dot decimals like `.5px` included).
 
 ## Interaction
 

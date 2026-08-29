@@ -32,8 +32,8 @@ pub fn pango_show(cr: &cairo::Context, font: &str, size: i32, weight: pango::Wei
     }
 }
 
-/// Measure text width using Pango.
-pub fn pango_measure(font: &str, size: i32, weight: pango::Weight, text: &str) -> f64 {
+/// Measure rendered text extents using Pango: `(width, height)` in pixels.
+pub fn pango_extents(font: &str, size: i32, weight: pango::Weight, text: &str) -> (f64, f64) {
     unsafe {
         let ctx_ptr = pango_font_map_create_context(pango_cairo_font_map_get_default());
         let ctx: pango::Context = glib::translate::from_glib_full(ctx_ptr);
@@ -43,9 +43,14 @@ pub fn pango_measure(font: &str, size: i32, weight: pango::Weight, text: &str) -
         desc.set_size(size);
         layout.set_font_description(Some(&desc));
         layout.set_text(text);
-        let (rect, _) = layout.pixel_extents();
-        rect.width() as f64
+        let rect = layout.pixel_extents().0;
+        (rect.width() as f64, rect.height() as f64)
     }
+}
+
+/// Measure text width using Pango.
+pub fn pango_measure(font: &str, size: i32, weight: pango::Weight, text: &str) -> f64 {
+    pango_extents(font, size, weight, text).0
 }
 
 /// Map a CSS numeric font-weight (100..900) onto a Pango weight.
@@ -212,13 +217,22 @@ pub fn top_bar_layout(
     let mut indices = Vec::new();
     for (i, m) in cfg.modules.iter().enumerate() {
         let out = outputs.get(i).cloned().unwrap_or_default();
+        let has_placeholder = m.format.contains("{output}");
         let body = m.format.replace("{output}", &out);
         let text = if m.icon.is_empty() {
             body
         } else {
             format!("{} {}", m.icon, body)
         };
-        if !text.trim().is_empty() {
+        // Placeholder formats render whenever their text is non-empty.
+        // Literal formats (e.g. `ICON_UPDATE` status glyphs) only render
+        // while the command actually produces output.
+        let visible = if has_placeholder {
+            !text.trim().is_empty()
+        } else {
+            !out.trim().is_empty()
+        };
+        if visible {
             texts.push(text);
             indices.push(i);
         }
@@ -240,6 +254,11 @@ pub fn top_bar_layout(
     let width = total_w + theme.pill_padding_x * 2.0;
     let rx = cx - width / 2.0;
     let ry = cy - r_out - theme.pill_offset_y - height;
+    // Not enough headroom above the ring: skip the pill entirely rather than
+    // clipping it offscreen while its hit-test zone stays clickable.
+    if ry < 0.0 {
+        return None;
+    }
 
     let mut lefts = Vec::new();
     let mut x = cx - total_w / 2.0;
@@ -498,5 +517,47 @@ mod tests {
             ),
             Some(1)
         );
+    }
+
+    #[test]
+    fn literal_format_renders_only_while_command_produces_output() {
+        let cfg = TopBarConfig {
+            enabled: true,
+            modules: vec![BarModule {
+                format: "ICON_UPDATE".into(),
+                ..Default::default()
+            }],
+        };
+        // No output -> literal glyph hidden entirely (no dead "ICON_UPDATE" pill).
+        assert!(top_bar_layout(
+            &cfg,
+            &Theme::default(),
+            100.0,
+            &["".to_string()],
+            500.0,
+            500.0
+        )
+        .is_none());
+        // Output present -> literal glyph shown as-is.
+        let layout = top_bar_layout(
+            &cfg,
+            &Theme::default(),
+            100.0,
+            &["yes".to_string()],
+            500.0,
+            500.0,
+        )
+        .expect("layout");
+        assert_eq!(layout.texts, vec!["ICON_UPDATE".to_string()]);
+        assert_eq!(layout.indices, vec![0]);
+    }
+
+    #[test]
+    fn pill_hidden_when_it_does_not_fit_above_the_ring() {
+        let cfg = test_config();
+        let outputs = vec!["1".to_string(), "2".to_string()];
+        // Cursor near the very top of the canvas: the pill would clip offscreen
+        // and must not be laid out at all (no invisible clickable zone).
+        assert!(top_bar_layout(&cfg, &Theme::default(), 110.0, &outputs, 400.0, 40.0).is_none());
     }
 }
