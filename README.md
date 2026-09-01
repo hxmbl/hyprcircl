@@ -86,6 +86,26 @@ bind = $mainMod, Space, exec, hyprcircl
 Launching `hyprcircl` with no running instance starts the persistent daemon and
 shows the menu; launching it again toggles visibility.
 
+### Quick start
+
+```sh
+hyprcircl init          # writes ~/.config/hyprcircl/{hyprcircl.toml,hyprcircl.css}
+hyprcircl config path   # print which config file is active
+```
+
+### CLI
+
+| Command | Description |
+| ------- | ----------- |
+| *(none)* / `toggle` | Toggle the menu (default) |
+| `show` | Show the menu |
+| `hide` | Hide the menu |
+| `quit` | Stop the background daemon |
+| `init` | Create starter config + theme (`--force` to overwrite) |
+| `config path` | Print active config path |
+
+Options: `-c` / `--config PATH` (or `HYPRCIRCL_CONFIG`), `--help`, `--version`.
+
 ## Configuration
 
 Config is loaded from the first existing path, in this priority order:
@@ -117,6 +137,7 @@ Top-level keys:
 | `item_gap_degrees` | float | `2.0` | Angular gap between wedges. |
 | `notify_only` | bool | `false` | If true, clicking an action only sends a notification instead of running it (safety mode). |
 | `show_labels` | bool | `true` | Show text labels under icons. |
+| `keyboard_navigation` | bool | `true` | Arrow keys / `h` `l` / `1`–`9` select wedges; Enter activates; Backspace pops a submenu. |
 | `items` | array | — | The menu tree (see below). |
 | `top_bar` | table | — | The status pill (see below). |
 
@@ -197,6 +218,10 @@ theme), `hsl()` / `hsla()`, or CSS color names. Sizes accept plain numbers,
 - **Mouse wheel over a pill applet** — runs that module's `on_scroll_up` /
   `on_scroll_down` (e.g. volume), otherwise switches workspaces.
 - **Esc** — pop one submenu level; press again at the root to close.
+- **← / →** or **h / l** — move selection between wedges (when `keyboard_navigation` is on).
+- **1–9** — jump to wedge by number.
+- **Enter / Space** — activate the selected wedge.
+- **Backspace** — pop one submenu level without closing at root.
 - **Page Up / Page Down** — next / previous Hyprland workspace.
 - **Left/right click & scroll on pill modules** — module `on_click*` actions.
 

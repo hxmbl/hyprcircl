@@ -25,7 +25,10 @@ mod process;
 mod theme;
 mod window;
 
-use crate::config::{find_css_path, load_config_with_path, watch_config, RadialConfig};
+use crate::config::{
+    find_css_path, init_user_config, load_config_with_path, resolved_config_path,
+    set_config_override, watch_config, RadialConfig,
+};
 use crate::cursor::cursor_local_pos;
 use crate::draw::{
     draw_rounded_sector, draw_top_bar, hit_test_pill, pango_extents, pango_measure, pango_show,
@@ -211,7 +214,8 @@ fn display_command(command: &[String]) -> String {
                 .chars()
                 .any(|c| c.is_whitespace() || c == '\'' || c == '"')
             {
-                format!("'{arg}'")
+                let escaped = arg.replace("'", "'\"'\"'");
+                format!("'{escaped}'")
             } else {
                 arg.clone()
             }
@@ -236,18 +240,51 @@ fn stream_backoff(failures: u32) -> Duration {
     Duration::from_millis((250u64.saturating_mul(1 << failures.min(7))).min(30_000))
 }
 
+/// Socket commands understood by the running daemon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DaemonCmd {
+    Toggle,
+    Show,
+    Hide,
+    Quit,
+}
+
+impl DaemonCmd {
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        match bytes {
+            b"toggle" => Some(Self::Toggle),
+            b"show" => Some(Self::Show),
+            b"hide" => Some(Self::Hide),
+            b"quit" | b"exit" => Some(Self::Quit),
+            _ => None,
+        }
+    }
+}
+
+/// Tell a running daemon to run `cmd`. Returns true if a daemon answered.
+fn signal_daemon(cmd: DaemonCmd) -> bool {
+    let path = socket_path();
+    let msg: &[u8] = match cmd {
+        DaemonCmd::Toggle => b"toggle",
+        DaemonCmd::Show => b"show",
+        DaemonCmd::Hide => b"hide",
+        DaemonCmd::Quit => b"quit",
+    };
+    if let Ok(mut stream) = UnixStream::connect(&path) {
+        let _ = stream.write_all(msg);
+        return true;
+    }
+    if cmd == DaemonCmd::Toggle {
+        let _ = std::fs::remove_file(&path);
+    }
+    false
+}
+
 /// Toggle: if another instance is already running, tell it to show/hide the
 /// menu over its socket and report `true` so this process exits. Otherwise
 /// report `false` so this process becomes the persistent daemon.
 fn signal_toggle() -> bool {
-    let path = socket_path();
-    if let Ok(mut stream) = UnixStream::connect(&path) {
-        let _ = stream.write_all(b"toggle");
-        return true;
-    }
-    // No live daemon: clear any stale socket left behind by a crash.
-    let _ = std::fs::remove_file(&path);
-    false
+    signal_daemon(DaemonCmd::Toggle)
 }
 
 /// Re-anchor the menu center so the radial circle is exactly under the cursor.
@@ -282,11 +319,184 @@ fn recenter_under_cursor(_window: &gtk4::ApplicationWindow, center: &RwLock<Opti
 // Main Application Window & Controller Logic
 // =========================================================================
 
-fn main() {
-    if signal_toggle() {
-        std::process::exit(0);
+// =========================================================================
+// CLI
+// =========================================================================
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn print_help() {
+    println!(
+        r#"hyprcircl {VERSION} — radial launcher for Hyprland
+
+USAGE:
+    hyprcircl [COMMAND] [OPTIONS]
+
+COMMANDS:
+    (none)          Toggle the menu (default; starts daemon on first run)
+    toggle          Same as no command
+    show            Show the menu
+    hide            Hide the menu
+    quit            Stop the background daemon
+    init            Create ~/.config/hyprcircl/ with starter config + theme
+    config path     Print the active (or default) config file path
+
+OPTIONS:
+    -c, --config <PATH>   Use this config file (also HYPRCIRCL_CONFIG)
+    -h, --help            Show this help
+    -V, --version         Show version
+
+EXAMPLES:
+    hyprcircl init
+    hyprcircl init --force
+    hyprcircl --config ~/my-menu.toml
+    hyprcircl config path
+
+Hyprland keybinding:
+    bind = $mainMod, Space, exec, hyprcircl
+"#
+    );
+}
+
+struct CliOptions {
+    config: Option<String>,
+    command: CliCommand,
+}
+
+enum CliCommand {
+    RunDaemon,
+    Init { force: bool },
+    ConfigPath,
+}
+
+fn parse_cli() -> CliOptions {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut config = None;
+    let mut command = CliCommand::RunDaemon;
+
+    while !args.is_empty() {
+        match args[0].as_str() {
+            "-h" | "--help" => {
+                print_help();
+                std::process::exit(0);
+            }
+            "-V" | "--version" => {
+                println!("hyprcircl {VERSION}");
+                std::process::exit(0);
+            }
+            "-c" | "--config" => {
+                if args.len() < 2 {
+                    eprintln!("error: --config requires a path");
+                    std::process::exit(2);
+                }
+                config = Some(args.remove(1));
+                args.remove(0);
+            }
+            "--force" => {
+                if matches!(command, CliCommand::Init { .. }) {
+                    command = CliCommand::Init { force: true };
+                }
+                args.remove(0);
+            }
+            "toggle" => {
+                command = CliCommand::RunDaemon;
+                args.remove(0);
+            }
+            "show" => {
+                if signal_daemon(DaemonCmd::Show) {
+                    std::process::exit(0);
+                }
+                eprintln!("hyprcircl: no running daemon");
+                std::process::exit(1);
+            }
+            "hide" => {
+                if signal_daemon(DaemonCmd::Hide) {
+                    std::process::exit(0);
+                }
+                eprintln!("hyprcircl: no running daemon");
+                std::process::exit(1);
+            }
+            "quit" | "exit" => {
+                if signal_daemon(DaemonCmd::Quit) {
+                    std::process::exit(0);
+                }
+                eprintln!("hyprcircl: no running daemon");
+                std::process::exit(1);
+            }
+            "init" => {
+                command = CliCommand::Init { force: false };
+                args.remove(0);
+            }
+            "config" => {
+                args.remove(0);
+                match args.first().map(String::as_str) {
+                    Some("path") => {
+                        command = CliCommand::ConfigPath;
+                        args.remove(0);
+                    }
+                    Some(other) => {
+                        eprintln!("error: unknown config subcommand '{other}'");
+                        std::process::exit(2);
+                    }
+                    None => {
+                        command = CliCommand::ConfigPath;
+                    }
+                }
+            }
+            other if other.starts_with('-') => {
+                eprintln!("error: unknown option '{other}'");
+                std::process::exit(2);
+            }
+            _ => {
+                eprintln!("error: unknown command '{}'", args[0]);
+                eprintln!("run `hyprcircl --help` for usage");
+                std::process::exit(2);
+            }
+        }
     }
 
+    CliOptions { config, command }
+}
+
+fn main() {
+    let cli = parse_cli();
+    if let Some(path) = cli.config {
+        set_config_override(path);
+    }
+
+    match cli.command {
+        CliCommand::ConfigPath => {
+            println!("{}", resolved_config_path().display());
+            return;
+        }
+        CliCommand::Init { force } => match init_user_config(force) {
+            Ok((toml, css)) => {
+                println!("Created {}", toml.display());
+                println!("Created {}", css.display());
+                println!();
+                println!("Edit the config, then bind a key:");
+                println!("  bind = $mainMod, Space, exec, hyprcircl");
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        },
+        CliCommand::RunDaemon => {
+            if signal_toggle() {
+                std::process::exit(0);
+            }
+        }
+    }
+
+    if !matches!(cli.command, CliCommand::RunDaemon) {
+        return;
+    }
+
+    run_daemon();
+}
+
+fn run_daemon() {
     let app = Application::builder()
         .application_id("com.omarchy.radial")
         .build();
@@ -1132,15 +1342,154 @@ fn build_window(app: &Application) {
     });
     canvas.add_controller(rclick);
 
-    // --- Escape / workspace keys: pop a level, close, or switch workspace ---
+    // --- Escape / workspace / keyboard navigation ---
     let key = EventControllerKey::new();
     let win_k = window.clone();
     let nav_k = nav_stack.clone();
     let h_k = hover_index.clone();
     let cv_k = canvas.clone();
     let shown_k = shown.clone();
+    let cfg_k = config.clone();
 
     key.connect_key_pressed(move |_, keyval, _, _| {
+        let cfg = match cfg_k.read() {
+            Ok(c) => c,
+            Err(_) => return Propagation::Proceed,
+        };
+
+        // Keyboard wedge navigation (left/right, 1-9, enter, backspace).
+        if cfg.keyboard_navigation {
+            let count = {
+                let stack = match nav_k.read() {
+                    Ok(s) => s,
+                    Err(_) => return Propagation::Proceed,
+                };
+                let current_level = stack.len().saturating_sub(1);
+                let mut items = &cfg.items;
+                for i in 0..current_level {
+                    if let Some(idx) = stack[i].selected_child_index {
+                        if idx < items.len() {
+                            items = &items[idx].items;
+                        } else {
+                            return Propagation::Proceed;
+                        }
+                    }
+                }
+                items.len()
+            };
+
+            let cycle_hover = |delta: isize| {
+                if count == 0 {
+                    return;
+                }
+                let cur = h_k.read().ok().and_then(|h| *h).unwrap_or(0);
+                let next = (cur as isize + delta).rem_euclid(count as isize) as usize;
+                if h_k.read().map(|h| *h != Some(next)).unwrap_or(true) {
+                    if let Ok(mut hover) = h_k.write() {
+                        *hover = Some(next);
+                    }
+                    cv_k.queue_draw();
+                }
+            };
+
+            match keyval {
+                Key::Left | Key::h => {
+                    cycle_hover(-1);
+                    return Propagation::Stop;
+                }
+                Key::Right | Key::l => {
+                    cycle_hover(1);
+                    return Propagation::Stop;
+                }
+                Key::BackSpace => {
+                    if let Ok(mut stack) = nav_k.write() {
+                        if stack.len() > 1 {
+                            stack.pop();
+                            if let Some(parent) = stack.last_mut() {
+                                parent.selected_child_index = None;
+                            }
+                            if let Ok(mut hover) = h_k.write() {
+                                *hover = None;
+                            }
+                            cv_k.queue_draw();
+                            return Propagation::Stop;
+                        }
+                    }
+                }
+                Key::Return | Key::KP_Enter | Key::space => {
+                    let idx = h_k.read().ok().and_then(|h| *h).unwrap_or(0);
+                    if count == 0 || idx >= count {
+                        return Propagation::Proceed;
+                    }
+                    let mut stack = match nav_k.write() {
+                        Ok(s) => s,
+                        Err(_) => return Propagation::Proceed,
+                    };
+                    let current_level = stack.len() - 1;
+                    let mut items: &Vec<crate::config::MenuItem> = &cfg.items;
+                    for i in 0..current_level {
+                        if let Some(iidx) = stack[i].selected_child_index {
+                            if iidx < items.len() {
+                                items = &items[iidx].items;
+                            } else {
+                                return Propagation::Proceed;
+                            }
+                        }
+                    }
+                    let clicked = &items[idx];
+                    if clicked.is_submenu() {
+                        stack[current_level].selected_child_index = Some(idx);
+                        let gap_rad = cfg.item_gap_degrees.to_radians();
+                        let parent_angle = stack[current_level].parent_mid_angle;
+                        let (a1, a2) =
+                            get_item_angles(current_level, idx, items.len(), parent_angle, gap_rad);
+                        let mid_angle = (a1 + a2) / 2.0;
+                        stack.push(LevelSelection {
+                            selected_child_index: None,
+                            parent_mid_angle: mid_angle,
+                        });
+                        if let Ok(mut hover) = h_k.write() {
+                            *hover = None;
+                        }
+                        cv_k.queue_draw();
+                    } else {
+                        let label = clicked.label.clone();
+                        let command = clicked.command.clone();
+                        let notify_only = cfg.notify_only;
+                        drop(stack);
+                        if notify_only {
+                            let _ = spawn_tracked(Command::new("notify-send").args([
+                                "-a",
+                                "hyprcircl",
+                                &label,
+                                &display_command(&command),
+                            ]));
+                        } else {
+                            spawn_menu_command(&command);
+                        }
+                        shown_k.store(false, Ordering::Relaxed);
+                        win_k.hide();
+                    }
+                    return Propagation::Stop;
+                }
+                _ => {
+                    if let Some(digit) = keyval.to_unicode() {
+                        if digit.is_ascii_digit() && digit != '0' {
+                            let n = (digit as u8 - b'0') as usize;
+                            if n <= count && count > 0 {
+                                let pick = n - 1;
+                                if let Ok(mut hover) = h_k.write() {
+                                    *hover = Some(pick);
+                                }
+                                cv_k.queue_draw();
+                                return Propagation::Stop;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         match keyval {
             Key::Escape => {
                 // Popping a level must clear hover too: the stored index came
@@ -1239,33 +1588,38 @@ fn build_window(app: &Application) {
     canvas.add_controller(scroll);
 
     // ===== DAEMON SOCKET =====
-    // A "toggle" from a future invocation of the binary is only signalled via
-    // an atomic flag; the flag is consumed on the GTK main thread by a fast
-    // timer below, keeping all widget access main-thread only. Keeping the
-    // process alive is what makes reopening near-instant (no GTK boot, no
-    // cursor probe, no cold modules) while preserving all behaviour.
-    let toggle_pending = Arc::new(AtomicBool::new(false));
+    // Commands from future invocations are queued as a small integer and
+    // consumed on the GTK main thread by the fast timer below.
+    const CMD_NONE: u8 = 0;
+    const CMD_TOGGLE: u8 = 1;
+    const CMD_SHOW: u8 = 2;
+    const CMD_HIDE: u8 = 3;
+    const CMD_QUIT: u8 = 4;
+
+    let daemon_cmd = Arc::new(std::sync::atomic::AtomicU8::new(CMD_NONE));
     if let Ok(listener) = UnixListener::bind(socket_path()) {
-        // Restrict the socket to its owner: without this the file inherits
-        // the umask and any local user could connect to toggle the menu.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(socket_path(), std::fs::Permissions::from_mode(0o600));
         }
-        let pending = toggle_pending.clone();
+        let pending = daemon_cmd.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut s) = stream else { continue };
                 let mut buf = [0u8; 16];
-                let _ = s.read(&mut buf);
-                pending.store(true, Ordering::Relaxed);
+                let n = s.read(&mut buf).unwrap_or(0);
+                let code = match DaemonCmd::parse(&buf[..n]) {
+                    Some(DaemonCmd::Toggle) => CMD_TOGGLE,
+                    Some(DaemonCmd::Show) => CMD_SHOW,
+                    Some(DaemonCmd::Hide) => CMD_HIDE,
+                    Some(DaemonCmd::Quit) => CMD_QUIT,
+                    None => continue,
+                };
+                pending.store(code, Ordering::Relaxed);
             }
         });
     } else {
-        // Failed to bind: either another daemon won the race (toggle it and
-        // exit) or a foreign/stale socket file owns the path (keep running,
-        // but say so — single-instance toggling is broken until it's gone).
         eprintln!("[SOCKET] could not bind {}", socket_path().display());
         if signal_toggle() {
             std::process::exit(0);
@@ -1282,7 +1636,7 @@ fn build_window(app: &Application) {
         });
     }
 
-    // Fast main-loop poller that applies pending toggles.
+    // Fast main-loop poller that applies pending socket commands.
     {
         let win_t = window.clone();
         let canvas_t = canvas.clone();
@@ -1290,37 +1644,33 @@ fn build_window(app: &Application) {
         let nav_t = nav_stack.clone();
         let hover_t = hover_index.clone();
         let shown_t = shown.clone();
-        let pending_t = toggle_pending.clone();
+        let pending_t = daemon_cmd.clone();
         timeout_add_local(Duration::from_millis(20), move || {
-            if pending_t.swap(false, Ordering::Relaxed) {
-                if shown_t.load(Ordering::Relaxed) {
-                    // Hide the menu, keep the daemon alive.
-                    shown_t.store(false, Ordering::Relaxed);
-                    win_t.hide();
-                } else {
-                    // Reopen: recenter at the cursor and reset navigation.
-                    shown_t.store(true, Ordering::Relaxed);
-                    if let Ok(mut stack) = nav_t.write() {
-                        *stack = vec![LevelSelection {
-                            selected_child_index: None,
-                            parent_mid_angle: 0.0,
-                        }];
-                    }
-                    if let Ok(mut hover) = hover_t.write() {
-                        *hover = None;
-                    }
-                    window::set_keyboard_exclusive(&win_t, true);
-                    canvas_t.queue_draw();
-                    win_t.present();
-
-                    // Move the overlay onto the display holding the cursor and
-                    // snap the circle center to it. Must happen AFTER present —
-                    // the macOS backend defers showing until the next frame
-                    // swap, so this lands before anything is rendered and
-                    // avoids a one-frame flash at the old location. On Linux
-                    // the layer-shell window already spans every monitor.
-                    recenter_under_cursor(&win_t, &center_t);
+            let cmd = pending_t.swap(CMD_NONE, Ordering::Relaxed);
+            if cmd == CMD_QUIT {
+                let _ = std::fs::remove_file(socket_path());
+                std::process::exit(0);
+            }
+            let show = cmd == CMD_SHOW || (cmd == CMD_TOGGLE && !shown_t.load(Ordering::Relaxed));
+            let hide = cmd == CMD_HIDE || (cmd == CMD_TOGGLE && shown_t.load(Ordering::Relaxed));
+            if hide {
+                shown_t.store(false, Ordering::Relaxed);
+                win_t.hide();
+            } else if show {
+                shown_t.store(true, Ordering::Relaxed);
+                if let Ok(mut stack) = nav_t.write() {
+                    *stack = vec![LevelSelection {
+                        selected_child_index: None,
+                        parent_mid_angle: 0.0,
+                    }];
                 }
+                if let Ok(mut hover) = hover_t.write() {
+                    *hover = None;
+                }
+                window::set_keyboard_exclusive(&win_t, true);
+                canvas_t.queue_draw();
+                win_t.present();
+                recenter_under_cursor(&win_t, &center_t);
             }
             ControlFlow::Continue
         });

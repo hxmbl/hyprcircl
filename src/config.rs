@@ -1,7 +1,278 @@
-use std::sync::{Arc, RwLock};
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+/// Optional CLI/env override, checked before the normal search order.
+static CONFIG_OVERRIDE: OnceLock<String> = OnceLock::new();
+
+pub fn set_config_override(path: String) {
+    let _ = CONFIG_OVERRIDE.set(path);
+}
+
+/// Default user config directory (`$XDG_CONFIG_HOME/hyprcircl` or `~/.config/hyprcircl`).
+pub fn default_config_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join("hyprcircl");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return PathBuf::from(home).join(".config/hyprcircl");
+        }
+    }
+    PathBuf::from(".config/hyprcircl")
+}
+
+const INIT_CONFIG_TOML: &str = r#"# =============================================================================
+# hyprcircl starter config
+#
+# Radial launcher for Hyprland. Edit this file freely — changes reload live.
+# Visual styling lives in hyprcircl.css next to this file (colors, fonts, etc.).
+#
+# Docs: https://github.com/hxmbl/hyprcircl  (or `hyprcircl --help`)
+# Bind in hyprland.conf:  bind = $mainMod, Space, exec, hyprcircl
+# =============================================================================
+
+schema_version = 1
+
+# -----------------------------------------------------------------------------
+# Ring geometry — drag these until the menu feels good under your thumb.
+# The empty center is intentional. That's where your dignity goes.
+# -----------------------------------------------------------------------------
+inner_radius = 40.0
+outer_radius = 110.0
+ring_thickness = 60.0
+ring_gap = 8.0
+item_gap_degrees = 2.0
+
+# -----------------------------------------------------------------------------
+# Behavior
+# -----------------------------------------------------------------------------
+notify_only = false       # true = show a notification instead of running commands (safe mode)
+show_labels = true        # text under icons; turn off for a cleaner look
+keyboard_navigation = true  # arrows / 1-9 / Enter / Backspace
+
+# -----------------------------------------------------------------------------
+# Top status pill (Waybar-style modules)
+#
+# Each [[top_bar.modules]] runs `command` every `interval` seconds, or use
+# `stream_command` for live push updates. `{output}` in `format` is replaced.
+# Optional: on_click, on_click_right, on_scroll_up/down, watch = ["/path/to/file"]
+# -----------------------------------------------------------------------------
+[top_bar]
+enabled = true
+
+# Live workspace number via Hyprland's event socket (needs jq + nc)
+[[top_bar.modules]]
+stream_command = "S=${HYPRLAND_INSTANCE_SIGNATURE:-$(hyprctl -j instances | jq -r '.[0].instance')}; hyprctl activeworkspace -j | jq -r '.id'; nc -U \"$XDG_RUNTIME_DIR/hypr/$S/.socket2.sock\" | while read -r line; do case \"$line\" in workspace>>*) echo \"${line#workspace>>}\";; workspacev2>>*) echo \"${line#workspacev2>>}\" | cut -d, -f1;; esac; done"
+interval = 1
+format = "󰖯 {output}"
+icon = ""
+
+# Clock — the module that never lies (until DST)
+[[top_bar.modules]]
+command = "date +'%a %H:%M'"
+interval = 30
+format = "{output}"
+icon = ""
+
+# Battery — tweak BAT0 if your sysfs path differs (check /sys/class/power_supply/)
+[[top_bar.modules]]
+command = "s=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null); c=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null); [ -n \"$c\" ] && { [ \"$s\" = \"Charging\" ] && echo \"󰂄 $c%\" || echo \"󰁹 $c%\"; }"
+interval = 30
+format = "{output}"
+icon = ""
+watch = ["/sys/class/power_supply/BAT0/capacity", "/sys/class/power_supply/BAT0/status"]
+
+# Volume — PulseAudio/PipeWire via pactl (comment out if you don't use it)
+[[top_bar.modules]]
+command = "v=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oE '[0-9]+%' | head -1); m=$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'); [ \"$m\" = \"yes\" ] && echo muted || echo \"${v:-?}\""
+interval = 5
+format = "󰕾 {output}"
+icon = ""
+on_click_right = "pactl set-sink-mute @DEFAULT_SINK@ toggle"
+on_scroll_up = "pactl set-sink-volume @DEFAULT_SINK@ +5%"
+on_scroll_down = "pactl set-sink-volume @DEFAULT_SINK@ -5%"
+
+# -----------------------------------------------------------------------------
+# Radial menu items
+#
+# Top-level [[items]] = wedges on the root ring.
+# Nested [[items.items]] (and deeper) = outer submenu rings.
+# Icons are Nerd Font glyphs — install a Nerd Font or swap for emoji.
+# `command` is a program + args list; leave empty for submenu-only entries.
+# -----------------------------------------------------------------------------
+
+# --- Apps (swap commands for whatever you actually have installed) -----------
+[[items]]
+label = "Apps"
+icon = "󰀻"
+
+  [[items.items]]
+  label = "Terminal"
+  icon = "󰆍"
+  # foot, kitty, alacritty, ghostty, wezterm… pick your poison
+  command = ["foot"]
+
+  [[items.items]]
+  label = "Browser"
+  icon = "󰖟"
+  # firefox, chromium, brave, zen… the internet is vast and full of trackers
+  command = ["firefox"]
+
+  [[items.items]]
+  label = "Files"
+  icon = "󰉋"
+  # thunar, nautilus, dolphin, pcmanfm-qt…
+  command = ["xdg-open", "."]
+
+  [[items.items]]
+  label = "Editor"
+  icon = "󰈔"
+  command = ["xdg-open", ""]
+
+# --- Hyprland window / layout actions (no extra apps required) ---------------
+[[items]]
+label = "Windows"
+icon = "󰖲"
+
+  [[items.items]]
+  label = "Float"
+  icon = "󰇛"
+  command = ["hyprctl", "dispatch", "togglefloating"]
+
+  [[items.items]]
+  label = "Fullscreen"
+  icon = "󰊓"
+  command = ["hyprctl", "dispatch", "fullscreen"]
+
+  [[items.items]]
+  label = "Close"
+  icon = "󰅖"
+  command = ["hyprctl", "dispatch", "killactive"]
+
+  [[items.items]]
+  label = "Workspace"
+  icon = "󰖯"
+
+    [[items.items.items]]
+    label = "Prev"
+    icon = "󰅁"
+    command = ["hyprctl", "dispatch", "workspace", "e-1"]
+
+    [[items.items.items]]
+    label = "Next"
+    icon = "󰅂"
+    command = ["hyprctl", "dispatch", "workspace", "e+1"]
+
+    [[items.items.items]]
+    label = "Empty"
+    icon = "󰖰"
+    command = ["hyprctl", "dispatch", "workspace", "empty"]
+
+# --- Media (playerctl — because nothing says "i use linux" like fighting dbus)
+[[items]]
+label = "Media"
+icon = "󰝚"
+
+  [[items.items]]
+  label = "Play/Pause"
+  icon = "󰐊"
+  command = ["playerctl", "play-pause"]
+
+  [[items.items]]
+  label = "Next"
+  icon = "󰒭"
+  command = ["playerctl", "next"]
+
+  [[items.items]]
+  label = "Previous"
+  icon = "󰒮"
+  command = ["playerctl", "previous"]
+
+# --- Screenshots (wayland classics: grim + slurp; delete if you lack them) ---
+[[items]]
+label = "Capture"
+icon = "󰄀"
+
+  [[items.items]]
+  label = "Region"
+  icon = "󰆍"
+  command = ["sh", "-c", "grim -g \"$(slurp)\" - | wl-copy"]
+
+  [[items.items]]
+  label = "Full"
+  icon = "󰹑"
+  command = ["sh", "-c", "grim - | wl-copy"]
+
+# --- Lock & power ------------------------------------------------------------
+[[items]]
+label = "Lock"
+icon = "󰌾"
+# hyprlock, swaylock, loginctl lock-session… whatever keeps roommates out
+command = ["loginctl", "lock-session"]
+
+[[items]]
+label = "Power"
+icon = "󰐥"
+
+  [[items.items]]
+  label = "Log out"
+  icon = "󰍃"
+  command = ["hyprctl", "dispatch", "exit"]
+
+  [[items.items]]
+  label = "Suspend"
+  icon = "󰒲"
+  command = ["systemctl", "suspend"]
+
+  [[items.items]]
+  label = "Reboot"
+  icon = "󰜉"
+  command = ["systemctl", "reboot"]
+
+  [[items.items]]
+  label = "Shutdown"
+  icon = "󰤂"
+  command = ["systemctl", "poweroff"]
+"#;
+
+/// Current configuration schema version. bump this when adding fields that
+/// change the config structure; old configs will be detected and defaults
+/// applied until the user re-saves.
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// Write a starter config + CSS into the user config directory.
+pub fn init_user_config(force: bool) -> Result<(PathBuf, PathBuf), String> {
+    let dir = default_config_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let toml_path = dir.join("hyprcircl.toml");
+    let css_path = dir.join("hyprcircl.css");
+    if toml_path.exists() && !force {
+        return Err(format!(
+            "{} already exists (use `hyprcircl init --force` to overwrite)",
+            toml_path.display()
+        ));
+    }
+    std::fs::write(&toml_path, INIT_CONFIG_TOML)
+        .map_err(|e| format!("write {}: {e}", toml_path.display()))?;
+    std::fs::write(&css_path, include_str!("../hyprcircl.css"))
+        .map_err(|e| format!("write {}: {e}", css_path.display()))?;
+    Ok((toml_path, css_path))
+}
+
+/// Path the loader would use: first existing candidate, else the default write location.
+pub fn resolved_config_path() -> PathBuf {
+    for path in config_paths() {
+        if std::path::Path::new(&path).exists() {
+            return PathBuf::from(path);
+        }
+    }
+    default_config_dir().join("hyprcircl.toml")
+}
 
 // =========================================================================
 // Data Configuration Model
@@ -94,12 +365,19 @@ pub struct RadialConfig {
     /// When false, text labels are hidden below icons in the radial menu.
     #[serde(default = "default_true")]
     pub show_labels: bool,
+    /// Arrow keys / number keys navigate wedges; Enter activates.
+    #[serde(default = "default_true")]
+    pub keyboard_navigation: bool,
     pub items: Vec<MenuItem>,
     /// Bumped by the watcher on every successful reload so consumers can
     /// detect "the module list changed" and rebuild index-keyed state
     /// instead of misattributing streams/outputs across a reorder.
     #[serde(skip, default)]
     pub generation: u64,
+    /// Configuration format version. Used to detect old config formats and
+    /// apply backward-compatible migrations or refuse to load incompatible ones.
+    #[serde(default)]
+    pub schema_version: u32,
 }
 
 fn default_ring_thickness() -> f64 {
@@ -124,7 +402,9 @@ impl Default for RadialConfig {
             item_gap_degrees: 2.0,
             notify_only: false,
             show_labels: true,
+            keyboard_navigation: true,
             generation: 0,
+            schema_version: env!("CARGO_PKG_VERSION").parse().unwrap_or(0),
             top_bar: TopBarConfig {
                 enabled: true,
                 modules: vec![
@@ -221,6 +501,14 @@ impl RadialConfig {
 /// fallback (e.g. a symlink) since it's too generic a name for a config folder.
 fn config_paths() -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
+    if let Some(override_path) = CONFIG_OVERRIDE.get() {
+        paths.push(override_path.clone());
+    }
+    if let Ok(env_path) = std::env::var("HYPRCIRCL_CONFIG") {
+        if !env_path.is_empty() {
+            paths.push(env_path);
+        }
+    }
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         if !xdg.is_empty() {
             paths.push(format!("{xdg}/hyprcircl/hyprcircl.toml"));
@@ -250,16 +538,33 @@ pub fn load_config_with_path() -> (RadialConfig, Option<String>) {
         let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
         };
-        return match toml::from_str::<RadialConfig>(&contents) {
-            Ok(cfg) => {
-                println!("[CONFIG] Loaded {path}");
-                (cfg, Some(path))
+        let cfg: Result<RadialConfig, _> = toml::from_str(&contents);
+        let cfg = match cfg {
+            Ok(mut cfg) => {
+                // Ensure schema_version exists (old configs won't have it).
+                if cfg.schema_version == 0 {
+                    cfg.schema_version = 1;
+                }
+                // Check for future versions we don't understand yet.
+                if cfg.schema_version > CURRENT_SCHEMA_VERSION {
+                    println!(
+                        "[CONFIG] Config {path} schema_version {} is ahead of \
+                         this hyprcircl version ({}), using defaults until \
+                         updated",
+                        cfg.schema_version,
+                        CURRENT_SCHEMA_VERSION
+                    );
+                    return (RadialConfig::default(), Some(path));
+                }
+                cfg
             }
             Err(e) => {
                 println!("[CONFIG] Failed to parse {path}, using defaults until fixed: {e}");
-                (RadialConfig::default(), Some(path))
+                return (RadialConfig::default(), Some(path));
             }
         };
+        println!("[CONFIG] Loaded {path}");
+        return (cfg, Some(path));
     }
 
     println!("[CONFIG] No config found, using defaults");
