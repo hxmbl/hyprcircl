@@ -240,4 +240,5 @@ theme), `hsl()` / `hsla()`, or CSS color names. Sizes accept plain numbers,
 | `.github/` | CI workflow (`lint` + `test`) and the Linux layer-shell setup action. |
 
 ## License
-no.
+
+MIT — see [LICENSE](LICENSE).
