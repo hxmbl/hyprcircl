@@ -109,6 +109,20 @@ hyprcircl config path   # print which config file is active
 
 Options: `-c` / `--config PATH` (or `HYPRCIRCL_CONFIG`), `--help`, `--version`.
 
+## Versions
+
+There are no release numbers like 1.0.3. Every push to `master` whose CI goes
+fully green is tagged with the next build number (`v1`, `v2`, ...); a red push
+gets none. Check yours with:
+
+```sh
+hyprcircl --version   # hyprcircl v12, or hyprcircl dev (abc1234) for an untagged local build
+```
+
+A build of a tagged checkout reports that tag. Packagers can set
+`HYPRCIRCL_BUILD=v12` at build time to stamp it explicitly. `Cargo.toml` keeps a
+placeholder semver version because Cargo requires one.
+
 ## Configuration
 
 Config is loaded from the first existing path, in this priority order:
@@ -259,6 +273,7 @@ theme), `hsl()` / `hsla()`, or CSS color names. Sizes accept plain numbers,
 
 | Path | Purpose |
 | ---- | ------- |
+| `build.rs` | Stamps the build number (`vN` or `dev (hash)`) into the binary. |
 | `src/main.rs` | Application entry, window controller, input handling, single-instance socket. |
 | `src/config.rs` | TOML config model, load/reload, and radii math. |
 | `src/theme.rs` | CSS theme loading and live watching. |
@@ -269,7 +284,7 @@ theme), `hsl()` / `hsla()`, or CSS color names. Sizes accept plain numbers,
 | `src/process.rs` | Shell command execution and process-group management. |
 | `src/preview.rs` | `hyprcircl preview`: renders one frame to PNG with the live drawing code. |
 | `scripts/screenshots/` | `render.sh` (docs screenshots) and `check-user-config.py` (renders a user config dir and checks its CSS/TOML overrides pixel by pixel). |
-| `.github/` | CI workflow (`lint` + `test`), the Screenshots workflow (release build, renders, user-config check) and the Linux layer-shell setup action. |
+| `.github/` | CI workflow (`lint` + `test`, then `version` mints the next `vN` on a green master push), the Screenshots workflow (release build, renders, user-config check) and the Linux layer-shell setup action. |
 
 ## License
 

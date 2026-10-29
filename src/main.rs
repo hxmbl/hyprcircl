@@ -76,6 +76,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn version_is_a_build_number_or_dev() {
+        let number = VERSION.strip_prefix('v');
+        let is_build = number.is_some_and(|n| n.parse::<u64>().is_ok());
+        assert!(is_build || VERSION.starts_with("dev"), "{VERSION}");
+    }
+
+    #[test]
     fn socket_path_uses_runtime_dir_or_private_fallback() {
         let _guard = crate::config::env_lock();
         // XDG_RUNTIME_DIR wins when present.
@@ -328,7 +335,8 @@ fn recenter_under_cursor(_window: &gtk4::ApplicationWindow, center: &RwLock<Opti
 // CLI
 // =========================================================================
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+// The green-build number ("v12") or "dev (abc1234)"; set by build.rs.
+const VERSION: &str = env!("HYPRCIRCL_VERSION");
 
 fn print_help() {
     println!(
