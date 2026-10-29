@@ -24,9 +24,12 @@ pub fn get_item_angles(
     gap_rad: f64,
 ) -> (f64, f64) {
     if level == 0 {
+        // Item 0 is centred on 12 o'clock and items run clockwise, so an
+        // 8-item menu lands on the compass points.
         let step = 2.0 * PI / count as f64;
-        let a1 = (index as f64 * step) - (PI / 2.0) + (gap_rad / 2.0);
-        let a2 = ((index + 1) as f64 * step) - (PI / 2.0) - (gap_rad / 2.0);
+        let start = -(PI / 2.0) - step / 2.0;
+        let a1 = start + (index as f64 * step) + (gap_rad / 2.0);
+        let a2 = start + ((index + 1) as f64 * step) - (gap_rad / 2.0);
         (a1, a2)
     } else {
         // Submenus: outward fan centered on the parent wedge's mid angle.
@@ -93,9 +96,12 @@ mod tests {
 
     #[test]
     fn root_angles_are_centered_at_top() {
-        // Item 0 should start at -90° (top), per the -PI/2 anchor.
-        let (a1, _a2) = get_item_angles(0, 0, 4, 0.0, 0.0);
-        assert!((a1 - (-PI / 2.0)).abs() < 1e-9);
+        // Item 0 is centred on -90° (12 o'clock).
+        let (a1, a2) = get_item_angles(0, 0, 4, 0.0, 0.0);
+        assert!(((a1 + a2) / 2.0 - (-PI / 2.0)).abs() < 1e-9);
+        // With 8 items, item 2 is centred on 3 o'clock (0 rad).
+        let (b1, b2) = get_item_angles(0, 2, 8, 0.0, 0.0);
+        assert!(((b1 + b2) / 2.0).abs() < 1e-9);
     }
 
     #[test]

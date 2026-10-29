@@ -1,81 +1,127 @@
 /* =========================================================================
-   hyprcircl theme — copy this file to ~/.config/hyprcircl/hyprcircl.css
-   (or next to wherever hyprcircl.toml lives) and edit freely. Changes apply
-   live without restarting the daemon.
+   hyprcircl theme — lives next to hyprcircl.toml
+   (~/.config/hyprcircl/hyprcircl.css). Edits apply live.
 
-   Colors accept hex (#rgb, #rgba, #rrggbb, #rrggbbaa), rgb()/rgba()
-   (channels as standard 0-255 numbers, percentages, or the 0..1 floats used
-   throughout this file), hsl()/hsla(), or CSS color names. Sizes accept
-   plain numbers, px, or pt.
+   Everything here is optional: a property you delete falls back to the
+   value shown, which is also the built-in theme.
+
+   Palette: dark translucent surface #1e2030, text #cad3f5, muted text
+   #a5adcb, one accent #8aadf4 (dark #181926 text on it). Every text/fill
+   pair is at least 4.5:1 (WCAG AA) on the composited ring.
+
+   Colours: #rgb #rgba #rrggbb #rrggbbaa, rgb()/rgba() (0-255, % or 0-1),
+   hsl()/hsla(), names. Sizes: plain numbers, px or pt. Font sizes are
+   points (10pt ≈ 13px).
    ========================================================================= */
 
-/* --- Radial menu items ------------------------------------------------ */
+/* --- Screen behind the menu ------------------------------------------- */
 
-/* Default wedge fill. `border-radius` on .item rounds the wedge corners. */
+/* A light tint over the desktop while the menu is open.
+   `transparent` turns it off. (`window { ... }` also works.) */
+.backdrop {
+    background-color: rgba(0, 0, 0, 0.18);
+}
+
+/* Soft shadow under each ring. `--size` is how far it spreads,
+   `display: none;` removes it. */
+.shadow {
+    color: rgba(0, 0, 0, 0.32);
+    --size: 22px;
+    --offset-y: 4px;
+}
+
+/* --- Wedges -------------------------------------------------------------
+   .item           rings you've already passed through (dimmer)
+   .item:active    the ring you're choosing from
+   .item:hover     wedge under the pointer / keyboard selection
+   .item:selected  the wedge whose submenu is open
+   ------------------------------------------------------------------------ */
+
 .item {
-    background-color: rgba(0.85, 0.85, 0.88, 0.90);
-    border-radius: 8px;
+    background-color: rgba(30, 32, 48, 0.66);
+    border-radius: 10px;
 }
 
-/* Wedge under the pointer (on the currently active ring). */
-.item:hover {
-    background-color: rgba(0.48, 0.63, 0.96, 0.95);
-}
-
-/* The ring that is currently open (non-hovered wedges). */
 .item:active {
-    background-color: rgba(0.85, 0.85, 0.88, 0.90);
+    background-color: rgba(30, 32, 48, 0.88);
 }
 
-/* The parent wedge leading into an open submenu. */
+.item:hover {
+    background-color: rgba(138, 173, 244, 0.96);
+}
+
 .item:selected {
-    background-color: rgba(0.88, 0.29, 0.29, 0.95);
+    background-color: rgba(138, 173, 244, 0.30);
 }
 
-/* Wedge outline. */
+/* Hairline outline; brighter on the hovered and open wedges. */
 .item-stroke {
-    border-color: rgba(0.7, 0.7, 0.75, 1.0);
-    border-width: 1.5px;
+    border-color: rgba(202, 211, 245, 0.10);
+    border-width: 1px;
 }
 
-/* --- Item text -------------------------------------------------------- */
+.item:hover .item-stroke {
+    border-color: #8aadf4;
+}
 
-/* Nerd Font glyph in the middle of each wedge. */
+.item:selected .item-stroke {
+    border-color: rgba(138, 173, 244, 0.70);
+}
+
+/* --- Icons and labels --------------------------------------------------- */
+
 .icon {
-    color: rgba(0.05, 0.05, 0.1, 1.0);
-    font-size: 20px;
+    color: #cad3f5;
     font-family: "JetBrainsMono Nerd Font";
-    font-weight: 700;
+    font-size: 17pt;
+    font-weight: 400;
 }
 
-/* Text label under the icon. `display: none;` hides labels. */
+.item:hover .icon {
+    color: #181926;
+}
+
+.item:selected .icon {
+    color: #cad3f5;
+}
+
+/* `display: none;` hides labels (or set `labels = false` in the TOML). */
 .label {
-    color: rgba(0.15, 0.15, 0.2, 0.85);
-    font-size: 8px;
+    color: #a5adcb;
     font-family: "JetBrainsMono Nerd Font";
-    font-weight: 700;
+    font-size: 8pt;
+    font-weight: 600;
+    margin-top: 3px;
 }
 
-/* --- Top pill (Waybar-style bar above the menu) ----------------------- */
+.item:hover .label {
+    color: #181926;
+}
 
-/*
-   background-color  pill backdrop
-   color             module text
-   height            pill height
-   padding           horizontal padding (the gap around the pill edge)
-   margin-top        distance between the menu ring and the pill
-   border-radius     pill corner rounding
-   --module-gap      horizontal spacing between modules
-*/
+.item:selected .label {
+    color: #cad3f5;
+}
+
+/* --- Status pill above the menu -----------------------------------------
+   height         pill height
+   padding        space between the pill's edge and the text
+   margin-top     distance between the ring and the pill
+   --module-gap   space between modules
+   --separator-color  hairline between modules (transparent hides it)
+   ------------------------------------------------------------------------ */
+
 .pill {
-    background-color: rgba(0.15, 0.15, 0.2, 0.9);
-    color: rgba(0.9, 0.9, 0.95, 1.0);
+    background-color: rgba(30, 32, 48, 0.88);
+    color: #cad3f5;
+    border-color: rgba(202, 211, 245, 0.10);
+    border-width: 1px;
     font-family: "JetBrainsMono Nerd Font";
-    font-size: 13px;
-    font-weight: 700;
-    height: 28px;
-    padding: 14px;
-    margin-top: 24px;
-    border-radius: 14px;
+    font-size: 10pt;
+    font-weight: 600;
+    height: 34px;
+    padding: 16px;
+    margin-top: 16px;
+    border-radius: 17px;
     --module-gap: 18px;
+    --separator-color: rgba(202, 211, 245, 0.16);
 }

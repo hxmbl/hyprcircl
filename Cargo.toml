@@ -7,6 +7,8 @@ license = "MIT"
 [dependencies]
 gtk4 = { version = "0.11", default-features = false }
 gdk4 = "0.11"
+# Same cairo as gtk4 re-exports; `png` is for `hyprcircl preview`.
+cairo-rs = { version = "0.22", features = ["png"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

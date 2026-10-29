@@ -1,0 +1,5 @@
+#!/bin/sh
+# Demo stand-in for screenshots: connected to a Wi-Fi network called "Home".
+case "$*" in
+  *device*) printf 'loopback:connected (externally):lo\nwifi:connected:Home\n' ;;
+esac

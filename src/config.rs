@@ -26,224 +26,10 @@ pub fn default_config_dir() -> PathBuf {
     PathBuf::from(".config/hyprcircl")
 }
 
-const INIT_CONFIG_TOML: &str = r#"# =============================================================================
-# hyprcircl starter config
-#
-# Radial launcher for Hyprland. Edit this file freely — changes reload live.
-# Visual styling lives in hyprcircl.css next to this file (colors, fonts, etc.).
-#
-# Docs: https://github.com/hxmbl/hyprcircl  (or `hyprcircl --help`)
-# Bind in hyprland.conf:  bind = $mainMod, Space, exec, hyprcircl
-# =============================================================================
-
-schema_version = 1
-
-# -----------------------------------------------------------------------------
-# Ring geometry — drag these until the menu feels good under your thumb.
-# The empty center is intentional. That's where your dignity goes.
-# -----------------------------------------------------------------------------
-inner_radius = 40.0
-outer_radius = 110.0
-ring_thickness = 60.0
-ring_gap = 8.0
-item_gap_degrees = 2.0
-
-# -----------------------------------------------------------------------------
-# Behavior
-# -----------------------------------------------------------------------------
-notify_only = false       # true = show a notification instead of running commands (safe mode)
-show_labels = true        # text under icons; turn off for a cleaner look
-keyboard_navigation = true  # arrows / 1-9 / Enter / Backspace
-
-# -----------------------------------------------------------------------------
-# Top status pill (Waybar-style modules)
-#
-# Each [[top_bar.modules]] runs `command` every `interval` seconds, or use
-# `stream_command` for live push updates. `{output}` in `format` is replaced.
-# Optional: on_click, on_click_right, on_scroll_up/down, watch = ["/path/to/file"]
-# -----------------------------------------------------------------------------
-[top_bar]
-enabled = true
-
-# Live workspace number via Hyprland's event socket (needs jq + nc)
-[[top_bar.modules]]
-stream_command = "S=${HYPRLAND_INSTANCE_SIGNATURE:-$(hyprctl -j instances | jq -r '.[0].instance')}; hyprctl activeworkspace -j | jq -r '.id'; nc -U \"$XDG_RUNTIME_DIR/hypr/$S/.socket2.sock\" | while read -r line; do case \"$line\" in workspace>>*) echo \"${line#workspace>>}\";; workspacev2>>*) echo \"${line#workspacev2>>}\" | cut -d, -f1;; esac; done"
-interval = 1
-format = "󰖯 {output}"
-icon = ""
-
-# Clock — the module that never lies (until DST)
-[[top_bar.modules]]
-command = "date +'%a %H:%M'"
-interval = 30
-format = "{output}"
-icon = ""
-
-# Battery — tweak BAT0 if your sysfs path differs (check /sys/class/power_supply/)
-[[top_bar.modules]]
-command = "s=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null); c=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null); [ -n \"$c\" ] && { [ \"$s\" = \"Charging\" ] && echo \"󰂄 $c%\" || echo \"󰁹 $c%\"; }"
-interval = 30
-format = "{output}"
-icon = ""
-watch = ["/sys/class/power_supply/BAT0/capacity", "/sys/class/power_supply/BAT0/status"]
-
-# Volume — PulseAudio/PipeWire via pactl (comment out if you don't use it)
-[[top_bar.modules]]
-command = "v=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oE '[0-9]+%' | head -1); m=$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'); [ \"$m\" = \"yes\" ] && echo muted || echo \"${v:-?}\""
-interval = 5
-format = "󰕾 {output}"
-icon = ""
-on_click_right = "pactl set-sink-mute @DEFAULT_SINK@ toggle"
-on_scroll_up = "pactl set-sink-volume @DEFAULT_SINK@ +5%"
-on_scroll_down = "pactl set-sink-volume @DEFAULT_SINK@ -5%"
-
-# -----------------------------------------------------------------------------
-# Radial menu items
-#
-# Top-level [[items]] = wedges on the root ring.
-# Nested [[items.items]] (and deeper) = outer submenu rings.
-# Icons are Nerd Font glyphs — install a Nerd Font or swap for emoji.
-# `command` is a program + args list; leave empty for submenu-only entries.
-# -----------------------------------------------------------------------------
-
-# --- Apps (swap commands for whatever you actually have installed) -----------
-[[items]]
-label = "Apps"
-icon = "󰀻"
-
-  [[items.items]]
-  label = "Terminal"
-  icon = "󰆍"
-  # foot, kitty, alacritty, ghostty, wezterm… pick your poison
-  command = ["foot"]
-
-  [[items.items]]
-  label = "Browser"
-  icon = "󰖟"
-  # firefox, chromium, brave, zen… the internet is vast and full of trackers
-  command = ["firefox"]
-
-  [[items.items]]
-  label = "Files"
-  icon = "󰉋"
-  # thunar, nautilus, dolphin, pcmanfm-qt…
-  command = ["xdg-open", "."]
-
-  [[items.items]]
-  label = "Editor"
-  icon = "󰈔"
-  command = ["xdg-open", ""]
-
-# --- Hyprland window / layout actions (no extra apps required) ---------------
-[[items]]
-label = "Windows"
-icon = "󰖲"
-
-  [[items.items]]
-  label = "Float"
-  icon = "󰇛"
-  command = ["hyprctl", "dispatch", "togglefloating"]
-
-  [[items.items]]
-  label = "Fullscreen"
-  icon = "󰊓"
-  command = ["hyprctl", "dispatch", "fullscreen"]
-
-  [[items.items]]
-  label = "Close"
-  icon = "󰅖"
-  command = ["hyprctl", "dispatch", "killactive"]
-
-  [[items.items]]
-  label = "Workspace"
-  icon = "󰖯"
-
-    [[items.items.items]]
-    label = "Prev"
-    icon = "󰅁"
-    command = ["hyprctl", "dispatch", "workspace", "e-1"]
-
-    [[items.items.items]]
-    label = "Next"
-    icon = "󰅂"
-    command = ["hyprctl", "dispatch", "workspace", "e+1"]
-
-    [[items.items.items]]
-    label = "Empty"
-    icon = "󰖰"
-    command = ["hyprctl", "dispatch", "workspace", "empty"]
-
-# --- Media (playerctl — because nothing says "i use linux" like fighting dbus)
-[[items]]
-label = "Media"
-icon = "󰝚"
-
-  [[items.items]]
-  label = "Play/Pause"
-  icon = "󰐊"
-  command = ["playerctl", "play-pause"]
-
-  [[items.items]]
-  label = "Next"
-  icon = "󰒭"
-  command = ["playerctl", "next"]
-
-  [[items.items]]
-  label = "Previous"
-  icon = "󰒮"
-  command = ["playerctl", "previous"]
-
-# --- Screenshots (wayland classics: grim + slurp; delete if you lack them) ---
-[[items]]
-label = "Capture"
-icon = "󰄀"
-
-  [[items.items]]
-  label = "Region"
-  icon = "󰆍"
-  command = ["sh", "-c", "grim -g \"$(slurp)\" - | wl-copy"]
-
-  [[items.items]]
-  label = "Full"
-  icon = "󰹑"
-  command = ["sh", "-c", "grim - | wl-copy"]
-
-# --- Lock & power ------------------------------------------------------------
-[[items]]
-label = "Lock"
-icon = "󰌾"
-# hyprlock, swaylock, loginctl lock-session… whatever keeps roommates out
-command = ["loginctl", "lock-session"]
-
-[[items]]
-label = "Power"
-icon = "󰐥"
-
-  [[items.items]]
-  label = "Log out"
-  icon = "󰍃"
-  command = ["hyprctl", "dispatch", "exit"]
-
-  [[items.items]]
-  label = "Suspend"
-  icon = "󰒲"
-  command = ["systemctl", "suspend"]
-
-  [[items.items]]
-  label = "Reboot"
-  icon = "󰜉"
-  command = ["systemctl", "reboot"]
-
-  [[items.items]]
-  label = "Shutdown"
-  icon = "󰤂"
-  command = ["systemctl", "poweroff"]
-"#;
-
 /// Current configuration schema version. bump this when adding fields that
 /// change the config structure; old configs will be detected and defaults
 /// applied until the user re-saves.
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Write a starter config + CSS into the user config directory.
 pub fn init_user_config(force: bool) -> Result<(PathBuf, PathBuf), String> {
@@ -257,7 +43,7 @@ pub fn init_user_config(force: bool) -> Result<(PathBuf, PathBuf), String> {
             toml_path.display()
         ));
     }
-    std::fs::write(&toml_path, INIT_CONFIG_TOML)
+    std::fs::write(&toml_path, DEFAULT_CONFIG_TOML)
         .map_err(|e| format!("write {}: {e}", toml_path.display()))?;
     std::fs::write(&css_path, include_str!("../hyprcircl.css"))
         .map_err(|e| format!("write {}: {e}", css_path.display()))?;
@@ -276,15 +62,76 @@ pub fn resolved_config_path() -> PathBuf {
 
 // =========================================================================
 // Data Configuration Model
+//
+// The file format (`RawConfig`) is deliberately forgiving: every key is
+// optional, geometry lives in a `[menu]` section, the status bar in `[bar]`,
+// and the flat keys / `[top_bar]` table of schema 1 configs are still read.
+// It is normalised into the flat runtime `RadialConfig` the rest of the
+// program uses, so `toml::from_str::<RadialConfig>` accepts both formats.
 // =========================================================================
+
+/// The config shipped in the repo root. It is the built-in default (used when
+/// no file exists, and for any section a user file leaves out) and the file
+/// `hyprcircl init` writes, so there is exactly one source of truth.
+pub const DEFAULT_CONFIG_TOML: &str = include_str!("../hyprcircl.toml");
+
+/// Built-in geometry, also used for keys missing from a user's `[menu]`.
+pub const DEFAULT_INNER_RADIUS: f64 = 60.0;
+pub const DEFAULT_OUTER_RADIUS: f64 = 156.0;
+pub const DEFAULT_SUBMENU_WIDTH: f64 = 76.0;
+pub const DEFAULT_RING_GAP: f64 = 8.0;
+pub const DEFAULT_ITEM_GAP: f64 = 6.0;
+pub const DEFAULT_ANIMATION_MS: u64 = 160;
+
+/// A menu command: either an argv list (`["playerctl", "next"]`, exec'd
+/// directly) or a single string, which runs through `sh -c` so pipes,
+/// `$(...)` and `~` work as written.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+enum CommandSpec {
+    Shell(String),
+    Argv(Vec<String>),
+}
+
+impl CommandSpec {
+    fn into_argv(self) -> Vec<String> {
+        match self {
+            CommandSpec::Argv(v) => v,
+            CommandSpec::Shell(s) if s.trim().is_empty() => Vec::new(),
+            CommandSpec::Shell(s) => vec!["sh".into(), "-c".into(), s],
+        }
+    }
+}
+
+fn de_command<'de, D>(d: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(CommandSpec::deserialize(d)?.into_argv())
+}
+
+fn de_command_list<'de, D>(d: D) -> Result<Vec<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<CommandSpec> = Vec::deserialize(d)?;
+    Ok(raw.into_iter().map(CommandSpec::into_argv).collect())
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MenuItem {
-    pub label: String,
-    pub icon: String,
-    /// Executed when clicked; empty for submenu items.
     #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub icon: String,
+    /// Executed when clicked; empty for submenu items. A string runs through
+    /// `sh -c`; a list is exec'd as argv.
+    #[serde(default, deserialize_with = "de_command")]
     pub command: Vec<String>,
+    /// Alternatives tried in order when `command`'s program is not installed
+    /// (e.g. a list of terminals). Same string/list forms as `command`.
+    #[serde(default, deserialize_with = "de_command_list")]
+    pub fallback: Vec<Vec<String>>,
     /// Recursive child items for submenus.
     #[serde(default)]
     pub items: Vec<MenuItem>,
@@ -294,25 +141,104 @@ impl MenuItem {
     pub fn is_submenu(&self) -> bool {
         !self.items.is_empty()
     }
+
+    /// The command to run: `command` when its program is on `PATH`,
+    /// otherwise the first `fallback` whose program is. Falls back to
+    /// `command` itself so a missing program still produces a clear spawn
+    /// error instead of silently doing nothing.
+    pub fn resolved_command(&self) -> Vec<String> {
+        if self.fallback.is_empty() || command_available(&self.command) {
+            return self.command.clone();
+        }
+        self.fallback
+            .iter()
+            .find(|c| command_available(c))
+            .cloned()
+            .unwrap_or_else(|| self.command.clone())
+    }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Whether the program a command would launch exists. For `sh -c` strings
+/// this is the first word of the script; `$VAR` words are expanded from the
+/// environment (so `$TERMINAL` counts as missing when it is unset).
+pub fn command_available(command: &[String]) -> bool {
+    let word = match command {
+        [sh, flag, script, ..] if sh == "sh" && flag == "-c" => {
+            script.split_whitespace().next().unwrap_or("").to_string()
+        }
+        [prog, ..] => prog.clone(),
+        [] => return false,
+    };
+    let word = word.trim_matches(|c| c == '"' || c == '\'');
+    let word = if let Some(var) = word.strip_prefix('$') {
+        let var = var.trim_matches(|c| c == '{' || c == '}');
+        match std::env::var(var) {
+            Ok(v) => v.split_whitespace().next().unwrap_or("").to_string(),
+            Err(_) => return false,
+        }
+    } else {
+        word.to_string()
+    };
+    program_on_path(&word)
+}
+
+fn program_on_path(prog: &str) -> bool {
+    if prog.is_empty() {
+        return false;
+    }
+    let is_exec = |p: &std::path::Path| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            p.metadata()
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        }
+        #[cfg(not(unix))]
+        {
+            p.is_file()
+        }
+    };
+    if prog.contains('/') {
+        return is_exec(std::path::Path::new(prog));
+    }
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| is_exec(&dir.join(prog))))
+        .unwrap_or(false)
+}
+
+fn default_interval() -> u64 {
+    5
+}
+
+fn default_format() -> String {
+    "{output}".into()
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BarModule {
     /// Shell command whose stdout becomes the module text (Waybar-style).
     /// Optional when a `stream_command` is used instead.
     #[serde(default)]
     pub command: String,
     /// Refresh interval in seconds.
+    #[serde(default = "default_interval")]
     pub interval: u64,
     /// Waybar-style format string; `{output}` is replaced with the command output.
+    #[serde(default = "default_format")]
     pub format: String,
     /// Optional icon rendered before the output.
+    #[serde(default)]
     pub icon: String,
     /// Optional long-lived push command: spawned once per show, its stdout
     /// lines become the module output (no interval polling). Empty disables.
     /// E.g. `pactl subscribe | ...` or reading the Hyprland event socket.
     #[serde(default)]
     pub stream_command: String,
+    /// Longest output shown, in characters; longer text is cut and ends in
+    /// "…" (Waybar `max-length`). 0 = no limit.
+    #[serde(default)]
+    pub max_length: usize,
     /// File paths whose changes re-run `command` before its interval elapses.
     /// Watched files are read cheaply every ~100ms (works with sysfs), so
     /// file-backed modules like brightness/battery update instantly without
@@ -320,53 +246,71 @@ pub struct BarModule {
     #[serde(default)]
     pub watch: Vec<String>,
     /// Shell command run when the module is left-clicked (Waybar `on-click`).
-    /// Waybar-style applets: e.g. `omarchy-launch-bluetooth`. Empty disables.
     #[serde(default)]
     pub on_click: String,
-    /// Shell command run when the module is right-clicked (Waybar
-    /// `on-click-right`), e.g. `pamixer -t` to toggle mute.
+    /// Shell command run when the module is right-clicked (Waybar `on-click-right`).
     #[serde(default)]
     pub on_click_right: String,
-    /// Shell command run when scrolling up over the module (Waybar
-    /// `on-scroll-up`), e.g. `pamixer -i 5` to raise volume.
+    /// Shell command run when scrolling up over the module (Waybar `on-scroll-up`).
     #[serde(default)]
     pub on_scroll_up: String,
-    /// Shell command run when scrolling down over the module (Waybar
-    /// `on-scroll-down`), e.g. `pamixer -d 5` to lower volume.
+    /// Shell command run when scrolling down over the module (Waybar `on-scroll-down`).
     #[serde(default)]
     pub on_scroll_down: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TopBarConfig {
-    pub enabled: bool,
-    /// Ordered list of Waybar-style modules rendered inside the pill.
-    /// Visual styling (colors, fonts, geometry) is driven by `hyprcircl.css`,
-    /// so the pill has no style fields here anymore.
-    pub modules: Vec<BarModule>,
+impl Default for BarModule {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            interval: default_interval(),
+            format: default_format(),
+            icon: String::new(),
+            stream_command: String::new(),
+            max_length: 0,
+            watch: Vec::new(),
+            on_click: String::new(),
+            on_click_right: String::new(),
+            on_scroll_up: String::new(),
+            on_scroll_down: String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TopBarConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Ordered list of Waybar-style modules rendered inside the pill.
+    /// Visual styling (colors, fonts, geometry) is driven by `hyprcircl.css`.
+    #[serde(default)]
+    pub modules: Vec<BarModule>,
+}
+
+/// Runtime configuration (normalised; see `RawConfig` for the file format).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "RawConfig")]
 pub struct RadialConfig {
     pub inner_radius: f64,
     pub outer_radius: f64,
     /// Thickness of each outer submenu ring.
-    #[serde(default = "default_ring_thickness")]
     pub ring_thickness: f64,
     /// Gap between consecutive rings.
-    #[serde(default = "default_ring_gap")]
     pub ring_gap: f64,
+    /// Legacy angular gap between wedges, in degrees. Only non-zero when a
+    /// config sets `item_gap_degrees` and no pixel `item_gap`.
     pub item_gap_degrees: f64,
+    /// Gap between wedges in pixels; constant width from hole to rim.
+    pub item_gap: f64,
+    /// Open animation length in milliseconds (0 disables).
+    pub animation_ms: u64,
     pub top_bar: TopBarConfig,
     /// When true, clicking an action only sends a notification instead of
     /// executing its command (safety mode).
-    #[serde(default)]
     pub notify_only: bool,
     /// When false, text labels are hidden below icons in the radial menu.
-    #[serde(default = "default_true")]
     pub show_labels: bool,
     /// Arrow keys / number keys navigate wedges; Enter activates.
-    #[serde(default = "default_true")]
     pub keyboard_navigation: bool,
     pub items: Vec<MenuItem>,
     /// Bumped by the watcher on every successful reload so consumers can
@@ -376,16 +320,117 @@ pub struct RadialConfig {
     pub generation: u64,
     /// Configuration format version. Used to detect old config formats and
     /// apply backward-compatible migrations or refuse to load incompatible ones.
-    #[serde(default)]
     pub schema_version: u32,
+    /// Keys the loader did not recognise (typos, removed options), reported
+    /// once per load so they don't fail silently.
+    #[serde(skip, default)]
+    pub unknown_keys: Vec<String>,
 }
 
-fn default_ring_thickness() -> f64 {
-    60.0
+/// `[menu]`: ring geometry and menu behaviour. Every key is optional.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawMenu {
+    inner_radius: Option<f64>,
+    outer_radius: Option<f64>,
+    #[serde(alias = "ring_thickness")]
+    submenu_width: Option<f64>,
+    ring_gap: Option<f64>,
+    item_gap: Option<f64>,
+    item_gap_degrees: Option<f64>,
+    animation_ms: Option<u64>,
+    #[serde(alias = "show_labels")]
+    labels: Option<bool>,
+    #[serde(alias = "keyboard_navigation")]
+    keyboard: Option<bool>,
+    notify_only: Option<bool>,
 }
 
-fn default_ring_gap() -> f64 {
-    8.0
+/// The on-disk format. Schema 2 groups keys into `[menu]` and `[bar]`;
+/// schema 1's flat keys and `[top_bar]` are still accepted (a `[menu]` key
+/// wins when both are present).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawConfig {
+    schema_version: Option<u32>,
+    menu: RawMenu,
+    #[serde(alias = "top_bar")]
+    bar: Option<TopBarConfig>,
+    items: Option<Vec<MenuItem>>,
+    // --- schema 1 flat keys ---
+    inner_radius: Option<f64>,
+    outer_radius: Option<f64>,
+    ring_thickness: Option<f64>,
+    ring_gap: Option<f64>,
+    item_gap_degrees: Option<f64>,
+    item_gap: Option<f64>,
+    animation_ms: Option<u64>,
+    notify_only: Option<bool>,
+    show_labels: Option<bool>,
+    keyboard_navigation: Option<bool>,
+}
+
+/// The shipped config, parsed once. Its `[bar]` and `[[items]]` are the
+/// defaults for files that leave those sections out.
+fn shipped() -> &'static RawConfig {
+    static SHIPPED: OnceLock<RawConfig> = OnceLock::new();
+    SHIPPED.get_or_init(|| toml::from_str(DEFAULT_CONFIG_TOML).unwrap_or_default())
+}
+
+impl From<RawConfig> for RadialConfig {
+    fn from(raw: RawConfig) -> Self {
+        let m = &raw.menu;
+        let item_gap_px = m.item_gap.or(raw.item_gap);
+        let legacy_deg = m.item_gap_degrees.or(raw.item_gap_degrees);
+        // A config that only sets the old angular gap keeps that look.
+        let (item_gap, item_gap_degrees) = match (item_gap_px, legacy_deg) {
+            (Some(px), _) => (px.max(0.0), 0.0),
+            (None, Some(deg)) => (0.0, deg.max(0.0)),
+            (None, None) => (DEFAULT_ITEM_GAP, 0.0),
+        };
+        let items = raw
+            .items
+            .clone()
+            .or_else(|| shipped().items.clone())
+            .unwrap_or_default();
+        let top_bar = raw
+            .bar
+            .clone()
+            .or_else(|| shipped().bar.clone())
+            .unwrap_or(TopBarConfig {
+                enabled: true,
+                modules: Vec::new(),
+            });
+        RadialConfig {
+            inner_radius: m
+                .inner_radius
+                .or(raw.inner_radius)
+                .unwrap_or(DEFAULT_INNER_RADIUS),
+            outer_radius: m
+                .outer_radius
+                .or(raw.outer_radius)
+                .unwrap_or(DEFAULT_OUTER_RADIUS),
+            ring_thickness: m
+                .submenu_width
+                .or(raw.ring_thickness)
+                .unwrap_or(DEFAULT_SUBMENU_WIDTH),
+            ring_gap: m.ring_gap.or(raw.ring_gap).unwrap_or(DEFAULT_RING_GAP),
+            item_gap,
+            item_gap_degrees,
+            animation_ms: m
+                .animation_ms
+                .or(raw.animation_ms)
+                .unwrap_or(DEFAULT_ANIMATION_MS),
+            notify_only: m.notify_only.or(raw.notify_only).unwrap_or(false),
+            show_labels: m.labels.or(raw.show_labels).unwrap_or(true),
+            keyboard_navigation: m.keyboard.or(raw.keyboard_navigation).unwrap_or(true),
+            top_bar,
+            items,
+            generation: 0,
+            schema_version: raw.schema_version.unwrap_or(0),
+            unknown_keys: Vec::new(),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -394,85 +439,156 @@ fn default_true() -> bool {
 
 impl Default for RadialConfig {
     fn default() -> Self {
-        Self {
-            inner_radius: 40.0,
-            outer_radius: 110.0,
-            ring_thickness: 60.0,
-            ring_gap: 8.0,
-            item_gap_degrees: 2.0,
-            notify_only: false,
-            show_labels: true,
-            keyboard_navigation: true,
-            generation: 0,
-            schema_version: env!("CARGO_PKG_VERSION").parse().unwrap_or(0),
-            top_bar: TopBarConfig {
-                enabled: true,
-                modules: vec![
-                    BarModule {
-                        command: "cat /proc/loadavg | awk '{print $1}'".into(),
-                        interval: 2,
-                        format: "CPU {output}".into(),
-                        ..Default::default()
-                    },
-                    BarModule {
-                        command: "free -h | awk '/^Mem/ {print $3 \"/\" $2}'".into(),
-                        interval: 5,
-                        format: "{output}".into(),
-                        ..Default::default()
-                    },
-                    BarModule {
-                        command: "date +'%a %H:%M'".into(),
-                        interval: 30,
-                        format: "{output}".into(),
-                        ..Default::default()
-                    },
-                ],
-            },
-            items: vec![
-                MenuItem {
-                    label: "Media".into(),
-                    icon: "🎵".into(),
-                    command: vec![],
-                    items: vec![
-                        MenuItem {
-                            label: "Play/Pause".into(),
-                            icon: "⏯".into(),
-                            command: vec!["playerctl".into(), "play-pause".into()],
-                            ..Default::default()
-                        },
-                        MenuItem {
-                            label: "Next".into(),
-                            icon: "⏭".into(),
-                            command: vec!["playerctl".into(), "next".into()],
-                            ..Default::default()
-                        },
-                        MenuItem {
-                            label: "Volume".into(),
-                            icon: "🔊".into(),
-                            command: vec![],
-                            items: vec![MenuItem {
-                                label: "Mute".into(),
-                                icon: "🔇".into(),
-                                command: vec!["pamixer".into(), "-t".into()],
-                                ..Default::default()
-                            }],
-                        },
-                    ],
-                },
-                MenuItem {
-                    label: "Terminal".into(),
-                    icon: "💻".into(),
-                    command: vec!["foot".into()],
-                    ..Default::default()
-                },
-                MenuItem {
-                    label: "Lock".into(),
-                    icon: "🔒".into(),
-                    command: vec!["hyprlock".into()],
-                    ..Default::default()
-                },
-            ],
+        let mut cfg: RadialConfig = toml::from_str(DEFAULT_CONFIG_TOML).unwrap_or_else(|_| {
+            // Unreachable in practice (a unit test parses the shipped file);
+            // keep a usable ring rather than panicking.
+            RadialConfig::from(RawConfig::default())
+        });
+        cfg.schema_version = CURRENT_SCHEMA_VERSION;
+        cfg
+    }
+}
+
+/// Keys hyprcircl understands, per table, for typo warnings.
+const KNOWN_TOP: &[&str] = &[
+    "schema_version",
+    "menu",
+    "bar",
+    "top_bar",
+    "items",
+    "inner_radius",
+    "outer_radius",
+    "ring_thickness",
+    "ring_gap",
+    "item_gap_degrees",
+    "item_gap",
+    "animation_ms",
+    "notify_only",
+    "show_labels",
+    "keyboard_navigation",
+    // schema 0/1 visual keys, moved to hyprcircl.css; ignored quietly.
+    "corner_radius",
+];
+const KNOWN_MENU: &[&str] = &[
+    "inner_radius",
+    "outer_radius",
+    "submenu_width",
+    "ring_thickness",
+    "ring_gap",
+    "item_gap",
+    "item_gap_degrees",
+    "animation_ms",
+    "labels",
+    "show_labels",
+    "keyboard",
+    "keyboard_navigation",
+    "notify_only",
+];
+const KNOWN_BAR: &[&str] = &[
+    "enabled",
+    "modules",
+    // moved to hyprcircl.css (.pill)
+    "height",
+    "padding_x",
+    "offset_y",
+    "corner_radius",
+    "background",
+    "foreground",
+    "font",
+];
+const KNOWN_MODULE: &[&str] = &[
+    "command",
+    "interval",
+    "format",
+    "icon",
+    "stream_command",
+    "max_length",
+    "watch",
+    "on_click",
+    "on_click_right",
+    "on_scroll_up",
+    "on_scroll_down",
+];
+const KNOWN_ITEM: &[&str] = &["label", "icon", "command", "fallback", "items"];
+
+fn unknown_keys(contents: &str) -> Vec<String> {
+    let Ok(top) = toml::from_str::<toml::Table>(contents) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let check = |t: &toml::Table, known: &[&str], prefix: &str, out: &mut Vec<String>| {
+        for k in t.keys() {
+            if !known.contains(&k.as_str()) {
+                out.push(format!("{prefix}{k}"));
+            }
         }
+    };
+    check(&top, KNOWN_TOP, "", &mut out);
+    if let Some(toml::Value::Table(menu)) = top.get("menu") {
+        check(menu, KNOWN_MENU, "menu.", &mut out);
+    }
+    for name in ["bar", "top_bar"] {
+        if let Some(toml::Value::Table(bar)) = top.get(name) {
+            check(bar, KNOWN_BAR, &format!("{name}."), &mut out);
+            if let Some(toml::Value::Array(mods)) = bar.get("modules") {
+                for (i, m) in mods.iter().enumerate() {
+                    if let toml::Value::Table(m) = m {
+                        check(m, KNOWN_MODULE, &format!("{name}.modules[{i}]."), &mut out);
+                    }
+                }
+            }
+        }
+    }
+    fn walk(items: &toml::Value, path: &str, out: &mut Vec<String>) {
+        if let toml::Value::Array(arr) = items {
+            for (i, it) in arr.iter().enumerate() {
+                if let toml::Value::Table(t) = it {
+                    let here = format!("{path}[{i}]");
+                    for k in t.keys() {
+                        if !KNOWN_ITEM.contains(&k.as_str()) {
+                            out.push(format!("{here}.{k}"));
+                        }
+                    }
+                    if let Some(children) = t.get("items") {
+                        walk(children, &format!("{here}.items"), out);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(items) = top.get("items") {
+        walk(items, "items", &mut out);
+    }
+    out
+}
+
+/// Parse and validate a config file's contents. Used by the initial load and
+/// the live-reload watcher so both apply the same rules.
+pub fn parse_config(contents: &str) -> Result<RadialConfig, String> {
+    let mut cfg: RadialConfig = toml::from_str(contents).map_err(|e| e.to_string())?;
+    if cfg.schema_version == 0 {
+        cfg.schema_version = 1;
+    }
+    if cfg.schema_version > CURRENT_SCHEMA_VERSION {
+        return Err(format!(
+            "schema_version {} is newer than this hyprcircl understands ({}); \
+             update hyprcircl or lower schema_version",
+            cfg.schema_version, CURRENT_SCHEMA_VERSION
+        ));
+    }
+    if cfg.outer_radius <= cfg.inner_radius {
+        return Err(format!(
+            "menu.outer_radius ({}) must be larger than menu.inner_radius ({})",
+            cfg.outer_radius, cfg.inner_radius
+        ));
+    }
+    cfg.unknown_keys = unknown_keys(contents);
+    Ok(cfg)
+}
+
+fn report_unknown_keys(path: &str, cfg: &RadialConfig) {
+    for k in &cfg.unknown_keys {
+        eprintln!("[CONFIG] {path}: unknown key `{k}` (ignored; see the README for valid keys)");
     }
 }
 
@@ -489,6 +605,13 @@ impl RadialConfig {
             let r_out = r_in + self.ring_thickness;
             (r_in, r_out)
         }
+    }
+
+    /// Angular gap used for wedge layout and hit-testing. Zero in pixel-gap
+    /// mode: the visual gap is drawn by `draw_rounded_sector`, and a pointer
+    /// in that thin gap simply belongs to the nearest wedge.
+    pub fn gap_rad(&self) -> f64 {
+        self.item_gap_degrees.to_radians()
     }
 }
 
@@ -538,31 +661,17 @@ pub fn load_config_with_path() -> (RadialConfig, Option<String>) {
         let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let cfg: Result<RadialConfig, _> = toml::from_str(&contents);
-        let cfg = match cfg {
-            Ok(mut cfg) => {
-                // Ensure schema_version exists (old configs won't have it).
-                if cfg.schema_version == 0 {
-                    cfg.schema_version = 1;
-                }
-                // Check for future versions we don't understand yet.
-                if cfg.schema_version > CURRENT_SCHEMA_VERSION {
-                    println!(
-                        "[CONFIG] Config {path} schema_version {} is ahead of \
-                         this hyprcircl version ({}), using defaults until \
-                         updated",
-                        cfg.schema_version,
-                        CURRENT_SCHEMA_VERSION
-                    );
-                    return (RadialConfig::default(), Some(path));
-                }
-                cfg
-            }
+        let cfg = match parse_config(&contents) {
+            Ok(cfg) => cfg,
             Err(e) => {
-                println!("[CONFIG] Failed to parse {path}, using defaults until fixed: {e}");
+                eprintln!("[CONFIG] {path}: {e}");
+                eprintln!(
+                    "[CONFIG] Using built-in defaults until the file is fixed (it is watched)."
+                );
                 return (RadialConfig::default(), Some(path));
             }
         };
+        report_unknown_keys(&path, &cfg);
         println!("[CONFIG] Loaded {path}");
         return (cfg, Some(path));
     }
@@ -634,7 +743,7 @@ mod tests {
             label: "Terminal".into(),
             icon: "💻".into(),
             command: vec!["foot".into()],
-            items: vec![],
+            ..Default::default()
         };
         assert!(!leaf.is_submenu());
 
@@ -646,8 +755,9 @@ mod tests {
                 label: "Next".into(),
                 icon: "⏭".into(),
                 command: vec!["playerctl".into(), "next".into()],
-                items: vec![],
+                ..Default::default()
             }],
+            ..Default::default()
         };
         assert!(branch.is_submenu());
     }
@@ -657,8 +767,22 @@ mod tests {
         let cfg = RadialConfig::default();
         assert!(cfg.inner_radius > 0.0);
         assert!(cfg.outer_radius > cfg.inner_radius);
-        assert_eq!(cfg.ring_thickness, 60.0);
-        assert_eq!(cfg.ring_gap, 8.0);
+        // The DEFAULT_* constants (used for keys a file leaves out) match
+        // the shipped file, so a partial config looks like the shipped one.
+        assert_eq!(cfg.inner_radius, DEFAULT_INNER_RADIUS);
+        assert_eq!(cfg.outer_radius, DEFAULT_OUTER_RADIUS);
+        assert_eq!(cfg.animation_ms, DEFAULT_ANIMATION_MS);
+        assert_eq!(cfg.ring_thickness, DEFAULT_SUBMENU_WIDTH);
+        assert_eq!(cfg.ring_gap, DEFAULT_RING_GAP);
+        assert_eq!(cfg.item_gap, DEFAULT_ITEM_GAP);
+        assert_eq!(cfg.item_gap_degrees, 0.0);
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        // The built-in default is the shipped file, item for item.
+        assert_eq!(cfg.items.len(), 8);
+        assert_eq!(cfg.items[0].label, "Terminal");
+        // Workspace, window title, clock, network, volume, battery.
+        assert_eq!(cfg.top_bar.modules.len(), 6);
+        assert_eq!(cfg.top_bar.modules[1].max_length, 24);
         assert!(cfg.show_labels);
         assert!(!cfg.notify_only);
         assert!(!cfg.items.is_empty());
@@ -817,6 +941,192 @@ items = [
     }
 
     #[test]
+    fn shipped_config_parses_cleanly() {
+        let cfg = parse_config(DEFAULT_CONFIG_TOML).expect("shipped hyprcircl.toml parses");
+        assert!(cfg.unknown_keys.is_empty(), "{:?}", cfg.unknown_keys);
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        // Every leaf has a command; every branch has children.
+        fn walk(items: &[MenuItem]) {
+            for it in items {
+                assert!(!it.label.is_empty() && !it.icon.is_empty());
+                if it.is_submenu() {
+                    walk(&it.items);
+                } else {
+                    assert!(!it.command.is_empty(), "{} has no command", it.label);
+                }
+            }
+        }
+        walk(&cfg.items);
+    }
+
+    #[test]
+    fn minimal_config_fills_in_defaults() {
+        // Just one item: geometry and bar come from the built-in defaults.
+        let cfg = parse_config(
+            r#"
+[[items]]
+label = "Term"
+icon = "T"
+command = "foot"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.items.len(), 1);
+        assert_eq!(cfg.items[0].command, vec!["sh", "-c", "foot"]);
+        assert_eq!(cfg.inner_radius, DEFAULT_INNER_RADIUS);
+        assert_eq!(cfg.outer_radius, DEFAULT_OUTER_RADIUS);
+        assert_eq!(cfg.top_bar, RadialConfig::default().top_bar);
+
+        // An empty file is the built-in config.
+        let empty = parse_config("").expect("empty parses");
+        assert_eq!(empty.items, RadialConfig::default().items);
+    }
+
+    #[test]
+    fn menu_section_and_legacy_flat_keys() {
+        let new = parse_config(
+            r#"
+[menu]
+inner_radius = 50
+outer_radius = 140
+submenu_width = 70
+item_gap = 4
+labels = false
+keyboard = false
+animation_ms = 0
+"#,
+        )
+        .unwrap();
+        assert_eq!((new.inner_radius, new.outer_radius), (50.0, 140.0));
+        assert_eq!(new.ring_thickness, 70.0);
+        assert_eq!(new.item_gap, 4.0);
+        assert!(!new.show_labels && !new.keyboard_navigation);
+        assert_eq!(new.animation_ms, 0);
+
+        // Schema 1: flat keys, [top_bar], angular gap -> same values.
+        let old = parse_config(
+            r#"
+schema_version = 1
+inner_radius = 50.0
+outer_radius = 140.0
+ring_thickness = 70.0
+item_gap_degrees = 2.0
+show_labels = false
+
+[top_bar]
+enabled = false
+modules = []
+"#,
+        )
+        .unwrap();
+        assert_eq!((old.inner_radius, old.outer_radius), (50.0, 140.0));
+        assert_eq!(old.ring_thickness, 70.0);
+        assert_eq!(old.item_gap_degrees, 2.0);
+        assert_eq!(old.item_gap, 0.0, "legacy angular gap keeps the old look");
+        assert!(!old.show_labels);
+        assert!(!old.top_bar.enabled);
+        assert!(old.unknown_keys.is_empty());
+
+        // [menu] wins over a flat key.
+        let both = parse_config("inner_radius = 10\n[menu]\ninner_radius = 30\n").unwrap();
+        assert_eq!(both.inner_radius, 30.0);
+    }
+
+    #[test]
+    fn command_string_list_and_fallback() {
+        let cfg = parse_config(
+            r#"
+[[items]]
+label = "A"
+icon = "a"
+command = ["hyprcircl-surely-missing-program", "--flag"]
+fallback = ["sh -c true", ["sh", "-c", "true"]]
+"#,
+        )
+        .unwrap();
+        let item = &cfg.items[0];
+        assert_eq!(item.fallback.len(), 2);
+        assert_eq!(item.fallback[0], vec!["sh", "-c", "sh -c true"]);
+        // The missing program is skipped in favour of the first fallback.
+        assert_eq!(item.resolved_command(), item.fallback[0]);
+        assert!(!command_available(&[
+            "hyprcircl-surely-missing-program".into()
+        ]));
+        assert!(command_available(&["sh".into()]));
+        assert!(!command_available(&[
+            "sh".into(),
+            "-c".into(),
+            "$HYPRCIRCL_UNSET_VAR_FOR_TEST --x".into()
+        ]));
+    }
+
+    #[test]
+    fn errors_and_unknown_keys_are_reported() {
+        let e = parse_config("[menu]\ninner_radius = 200\nouter_radius = 100\n").unwrap_err();
+        assert!(e.contains("outer_radius"), "{e}");
+        let e = parse_config("schema_version = 99\n").unwrap_err();
+        assert!(e.contains("schema_version"), "{e}");
+        let cfg = parse_config(
+            "inner_radus = 3\n[menu]\nlabelz = true\n[[items]]\nlabel = \"x\"\nicno = \"y\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.unknown_keys,
+            vec!["inner_radus", "menu.labelz", "items[0].icno"]
+        );
+    }
+
+    #[test]
+    fn user_config_dir_toml_and_css_are_used() {
+        let _guard = env_lock();
+        // A user's ~/.config/hyprcircl (or $XDG_CONFIG_HOME/hyprcircl) must win:
+        // the TOML there is the config, and the CSS next to it is the theme.
+        let root = std::env::temp_dir().join(format!("hyprcircl-xdg-{}", std::process::id()));
+        let home = root.join("home");
+        let xdg = root.join("xdg");
+        let saved_home = std::env::var_os("HOME");
+        // The config dirs rank above the crate's own ./hyprcircl.toml.
+        std::env::remove_var("HYPRCIRCL_CONFIG");
+
+        for (base, use_xdg) in [
+            (xdg.join("hyprcircl"), true),
+            (home.join(".config/hyprcircl"), false),
+        ] {
+            std::fs::create_dir_all(&base).expect("mkdir");
+            std::fs::write(base.join("hyprcircl.toml"), "[menu]\ninner_radius = 33\n")
+                .expect("toml");
+            std::fs::write(
+                base.join("hyprcircl.css"),
+                ".pill { --separator-color: transparent; }",
+            )
+            .expect("css");
+            std::env::set_var("HOME", &home);
+            if use_xdg {
+                std::env::set_var("XDG_CONFIG_HOME", &xdg);
+            } else {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            }
+            assert_eq!(default_config_dir(), base);
+            let (cfg, path) = load_config_with_path();
+            let toml_path = base.join("hyprcircl.toml");
+            assert_eq!(path.as_deref(), Some(toml_path.to_string_lossy().as_ref()));
+            assert_eq!(cfg.inner_radius, 33.0);
+            let css = find_css_path(path.as_deref()).expect("css found");
+            assert_eq!(css, base.join("hyprcircl.css").to_string_lossy());
+            let theme = crate::theme::Theme::from_css(&std::fs::read_to_string(&css).unwrap());
+            assert_eq!(theme.pill_separator.3, 0.0);
+            std::fs::remove_dir_all(&base).expect("cleanup");
+        }
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        match saved_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn find_css_path_returns_existing_or_none() {
         let _guard = env_lock();
         // Must never panic and only ever return an existing path.
@@ -848,8 +1158,9 @@ where
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 if last_contents.as_deref() != Some(&contents) {
                     last_contents = Some(contents.clone());
-                    match toml::from_str::<RadialConfig>(&contents) {
+                    match parse_config(&contents) {
                         Ok(mut cfg) => {
+                            report_unknown_keys(&path, &cfg);
                             let next_gen = config
                                 .read()
                                 .map(|c| c.generation.wrapping_add(1))
@@ -861,7 +1172,7 @@ where
                             on_reload();
                             println!("[CONFIG] Reloaded {path}");
                         }
-                        Err(e) => println!("[CONFIG] Failed to parse {path}: {e}"),
+                        Err(e) => eprintln!("[CONFIG] {path}: {e} (keeping the previous config)"),
                     }
                 }
             }

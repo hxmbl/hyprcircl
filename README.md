@@ -89,7 +89,8 @@ shows the menu; launching it again toggles visibility.
 ### Quick start
 
 ```sh
-hyprcircl init          # writes ~/.config/hyprcircl/{hyprcircl.toml,hyprcircl.css}
+hyprcircl init          # writes $XDG_CONFIG_HOME/hyprcircl/{hyprcircl.toml,hyprcircl.css}
+                        # (~/.config/hyprcircl/ when XDG_CONFIG_HOME is unset)
 hyprcircl config path   # print which config file is active
 ```
 
@@ -103,6 +104,8 @@ hyprcircl config path   # print which config file is active
 | `quit` | Stop the background daemon |
 | `init` | Create starter config + theme (`--force` to overwrite) |
 | `config path` | Print active config path |
+| `config check` | Validate the config and report unknown keys or bad values |
+| `preview OUT.png` | Render one frame to a PNG without a compositor (`--size`, `--scale`, `--open`, `--hover`, `--background`, `--center`; see `hyprcircl --help`) |
 
 Options: `-c` / `--config PATH` (or `HYPRCIRCL_CONFIG`), `--help`, `--version`.
 
@@ -117,43 +120,49 @@ Config is loaded from the first existing path, in this priority order:
 5. `hyprcircl.toml` in the current directory
 6. `config.toml` in the current directory
 
-If no file is found, built-in defaults are used (see `RadialConfig::default` in
-`src/config.rs`). The TOML file is watched and reloaded on change — no restart
-needed.
+If no file is found, the shipped [`hyprcircl.toml`](./hyprcircl.toml) is the
+built-in default (it is compiled in). Every key is optional: a file that leaves
+a key, `[bar]` or `[[items]]` out gets the shipped value. The file is watched
+and reloaded on change, with no restart needed. Unknown keys are reported on
+stderr as `[CONFIG] ... unknown key` and ignored.
 
-A complete reference config ships in [`hyprcircl.toml`](./hyprcircl.toml) at the
-repo root.
+The shipped file is the full reference, commented key by key. Colours, fonts
+and the pill's size live in [`hyprcircl.css`](#theming-css), not the TOML.
 
-### Radial menu geometry
+### `[menu]`: ring geometry and behaviour
 
-Top-level keys:
+Sizes are logical pixels, so they scale with the monitor's scale factor.
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `inner_radius` | float | `40.0` | Radius of the menu's empty center hole. |
-| `outer_radius` | float | `110.0` | Outer edge of the root ring. |
-| `ring_thickness` | float | `60.0` | Thickness of each outer submenu ring. |
-| `ring_gap` | float | `8.0` | Gap between consecutive rings. |
-| `item_gap_degrees` | float | `2.0` | Angular gap between wedges. |
-| `notify_only` | bool | `false` | If true, clicking an action only sends a notification instead of running it (safety mode). |
-| `show_labels` | bool | `true` | Show text labels under icons. |
-| `keyboard_navigation` | bool | `true` | Arrow keys / `h` `l` / `1`–`9` select wedges; Enter activates; Backspace pops a submenu. |
-| `items` | array | — | The menu tree (see below). |
-| `top_bar` | table | — | The status pill (see below). |
+| `inner_radius` | float | `60` | Radius of the empty hole in the middle. |
+| `outer_radius` | float | `156` | Outer edge of the main ring. |
+| `submenu_width` | float | `76` | Width of each submenu ring that opens outside it. |
+| `ring_gap` | float | `8` | Space between rings. |
+| `item_gap` | float | `6` | Space between wedges, the same width from hole to rim. |
+| `animation_ms` | int | `160` | Open/expand animation; `0` turns it off. |
+| `labels` | bool | `true` | Text under icons. |
+| `keyboard` | bool | `true` | ←/→ or `h`/`l`, `1`–`9`, Enter, Backspace, Esc. |
+| `notify_only` | bool | `false` | Show a notification instead of running the command (dry run). |
+
+Schema 1 configs (flat top-level keys such as `inner_radius`, `ring_thickness`,
+`item_gap_degrees`, and `[top_bar]`) still load. A config that sets only
+`item_gap_degrees` keeps its angular gaps; geometry keys it leaves out now get
+the values above.
 
 ### Menu items
 
-Each `[[items]]` entry is a `MenuItem`:
+Each `[[items]]` entry is a menu item, clockwise from the top:
 
 | Key | Type | Description |
 | --- | ---- | ----------- |
 | `label` | string | Text shown under the icon. |
-| `icon` | string | Glyph shown in the wedge (typically a Nerd Font icon). |
-| `command` | array of strings | Executed on click. Empty for submenu parents. Entries are exec'd directly as argv; if any entry contains shell syntax (`$(...)`, `\|`, `;`, `&`, redirects, globs), the whole list is joined and run via `sh -c`, so `["grim", "-g", "$(slurp)", "-"]` works as written. |
-| `items` | array of `MenuItem` | Child items; a non-empty list makes this a submenu. |
+| `icon` | string | Glyph shown in the wedge (a Nerd Font icon). |
+| `command` | string or array | Run on click. A string runs through `sh -c` (pipes, `$(...)`, `~` all work); a list like `["playerctl", "next"]` is run directly. Leave it out on submenu parents. |
+| `fallback` | array | Commands tried in order when `command`'s program isn't installed, e.g. `["kitty", "foot", "alacritty"]`. |
+| `items` | array | Child items; a non-empty list makes this a submenu ring. |
 
-Nesting is recursive — a child can itself contain `items` for deeper submenus.
-Submenus open as additional concentric rings outward from the root.
+Nesting is recursive: a child can have its own `[[items.items.items]]`.
 
 ```toml
 [[items]]
@@ -161,50 +170,71 @@ label = "Media"
 icon = "󰝚"
 
   [[items.items]]
-  label = "Play/Pause"
-  icon = "󰐊"
+  label = "Play"
+  icon = "󰐎"
   command = ["playerctl", "play-pause"]
 ```
 
-### Top pill (`[top_bar]`)
+### `[bar]`: the status pill
 
 ```toml
-[top_bar]
+[bar]
 enabled = true
 ```
 
-Each `[[top_bar.modules]]` is a Waybar-style module:
+The shipped pill shows the workspace, the focused window's title, the clock,
+network, volume and battery. Each `[[bar.modules]]` is a Waybar-style module,
+and a module whose command prints nothing is hidden, so missing hardware (a
+desktop's battery, say) just disappears:
 
 | Key | Type | Description |
 | --- | ---- | ----------- |
 | `command` | string | Shell command whose stdout becomes the module text. |
-| `interval` | int | Refresh interval in seconds (minimum 1). |
-| `format` | string | `{output}` is replaced with the command output. A format *without* `{output}` renders literally, but only while the command produces output — e.g. `format = "ICON_UPDATE"` shows the glyph only when an update check prints something. |
+| `interval` | int | Seconds between runs (default 5). |
+| `stream_command` | string | Long-lived command; each stdout line replaces the text (no polling). Used for Hyprland's event socket, `pactl subscribe`, etc. A stream that dies is respawned with backoff. |
+| `watch` | array of strings | Files (sysfs works) whose changes re-run `command` immediately. |
+| `format` | string | `{output}` is replaced by the text (default `"{output}"`). A format *without* `{output}` renders literally, but only while the command prints something. |
 | `icon` | string | Optional leading glyph. |
-| `stream_command` | string | Long-lived push command; each stdout line updates the module (no interval polling). Used for the Hyprland event socket, `pactl subscribe`, etc. A stream that dies is respawned with exponential backoff. |
-| `watch` | array of strings | File paths (e.g. sysfs nodes) whose changes re-run `command` immediately. |
-| `on_click` | string | Shell command on left click. |
-| `on_click_right` | string | Shell command on right click. |
-| `on_scroll_up` | string | Shell command on scroll up (wheel up). |
-| `on_scroll_down` | string | Shell command on scroll down (wheel down). |
+| `max_length` | int | Longest text in characters; longer text is cut and ends in `…` (default `0`: no limit). |
+| `on_click` / `on_click_right` | string | Shell command on left / right click. |
+| `on_scroll_up` / `on_scroll_down` | string | Shell command on wheel up / down. |
+
+Write multi-line commands as TOML literal strings (`'''...'''`): in `"""`
+strings, `\n` and friends are TOML escapes and reach the shell changed.
 
 ## Theming (CSS)
 
-Visual styling lives in a `hyprcircl.css` file placed next to your
-`hyprcircl.toml` (e.g. `~/.config/hyprcircl/hyprcircl.css`). It is watched and
-reloaded live. A reference theme ships in [`hyprcircl.css`](./hyprcircl.css).
+Visual styling lives in `hyprcircl.css`, read from the directory of the
+`hyprcircl.toml` that loaded, otherwise from the first config directory that
+has one: `$XDG_CONFIG_HOME/hyprcircl/hyprcircl.css`, then
+`~/.config/hyprcircl/hyprcircl.css`, then `./hyprcircl.css`. With no file, the
+built-in theme is used, and it is identical to the shipped
+[`hyprcircl.css`](./hyprcircl.css), which documents every property. The file
+is watched and reloaded live.
 
-Supported selectors:
+hyprcircl reads this file with its own small CSS parser and draws everything
+itself, so only the selectors and properties below have an effect; other GTK
+CSS is ignored. Later rules win over earlier ones.
 
-- `.item` — wedge fill (use `border-radius` to round corners)
-- `.item:hover` — wedge under the pointer
-- `.item:active` — open ring (non-hovered wedges)
-- `.item:selected` — parent wedge leading into an open submenu
-- `.item-stroke` — wedge outline (`border-color`, `border-width`)
-- `.icon` — the Nerd Font glyph (`color`, `font-size`, `font-family`, `font-weight`)
-- `.label` — the text label (`display: none;` hides labels)
-- `.pill` — the status pill (`background-color`, `color`, `height`, `padding`,
-  `margin-top`, `border-radius`, `font-*`, and `--module-gap` for spacing)
+| Selector | Properties |
+| -------- | ---------- |
+| `.backdrop` (or `window`) | `background-color`: tint over the desktop while the menu is open; `transparent` turns it off |
+| `.shadow` | `color`, `--size` (spread), `--offset-y`; `display: none` removes it |
+| `.item` | `background-color` of rings you've passed through; `border-radius` rounds wedge corners |
+| `.item:active` | fill of the ring you're choosing from |
+| `.item:hover` (or `:focus`) | fill of the wedge under the pointer / keyboard selection |
+| `.item:selected` | fill of the wedge whose submenu is open |
+| `.item-stroke` | wedge outline: `border-color` (or `color`), `border-width`; per state with `.item:hover .item-stroke` / `.item:selected .item-stroke` |
+| `.icon` | the Nerd Font glyph: `color`, `font-family`, `font-size`, `font-weight`; per state with `.item:hover .icon` / `.item:selected .icon` |
+| `.label` | the text under the icon: `color`, `font-*`, `margin-top` (space below the icon), `display: none` hides labels; per state like `.icon` |
+| `.pill` | the status pill: `background-color`, `color`, `border-color`, `border-width`, `font-*`, `height`, `padding`, `margin-top` (distance above the ring), `border-radius`, `--module-gap` (spacing between modules) and `--separator-color` (hairline between modules; `transparent` hides it) |
+
+The hovered and selected wedges have their own icon, label and outline
+colours, so a theme that changes `.item:hover` usually wants
+`.item:hover .icon` and `.item:hover .label` too.
+
+Ring geometry (radii, gaps, animation) and whether labels show at all are in
+the TOML's [`[menu]`](#menu-ring-geometry-and-behaviour) table.
 
 Colors accept `#rgb` / `#rrggbb` / `#rrggbbaa`, `rgb()` / `rgba()` (channels as
 standard 0–255 numbers, percentages, or the 0..1 floats used by the shipped
@@ -237,7 +267,9 @@ theme), `hsl()` / `hsla()`, or CSS color names. Sizes accept plain numbers,
 | `src/window.rs` | Platform-specific overlay window setup. |
 | `src/cursor.rs` | Cursor position in display-local coordinates (Linux). |
 | `src/process.rs` | Shell command execution and process-group management. |
-| `.github/` | CI workflow (`lint` + `test`) and the Linux layer-shell setup action. |
+| `src/preview.rs` | `hyprcircl preview`: renders one frame to PNG with the live drawing code. |
+| `scripts/screenshots/` | `render.sh` (docs screenshots) and `check-user-config.py` (renders a user config dir and checks its CSS/TOML overrides pixel by pixel). |
+| `.github/` | CI workflow (`lint` + `test`), the Screenshots workflow (release build, renders, user-config check) and the Linux layer-shell setup action. |
 
 ## License
 

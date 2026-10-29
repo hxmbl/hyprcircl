@@ -1,0 +1,3 @@
+#!/bin/sh
+# No Hyprland event socket here; stay quiet like an idle socket would.
+exec sleep 3600
