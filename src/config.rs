@@ -1077,6 +1077,56 @@ fallback = ["sh -c true", ["sh", "-c", "true"]]
     }
 
     #[test]
+    fn user_config_dir_toml_and_css_are_used() {
+        let _guard = env_lock();
+        // A user's ~/.config/hyprcircl (or $XDG_CONFIG_HOME/hyprcircl) must win:
+        // the TOML there is the config, and the CSS next to it is the theme.
+        let root = std::env::temp_dir().join(format!("hyprcircl-xdg-{}", std::process::id()));
+        let home = root.join("home");
+        let xdg = root.join("xdg");
+        let saved_home = std::env::var_os("HOME");
+        // The config dirs rank above the crate's own ./hyprcircl.toml.
+        std::env::remove_var("HYPRCIRCL_CONFIG");
+
+        for (base, use_xdg) in [
+            (xdg.join("hyprcircl"), true),
+            (home.join(".config/hyprcircl"), false),
+        ] {
+            std::fs::create_dir_all(&base).expect("mkdir");
+            std::fs::write(base.join("hyprcircl.toml"), "[menu]\ninner_radius = 33\n")
+                .expect("toml");
+            std::fs::write(
+                base.join("hyprcircl.css"),
+                ".pill { --separator-color: transparent; }",
+            )
+            .expect("css");
+            std::env::set_var("HOME", &home);
+            if use_xdg {
+                std::env::set_var("XDG_CONFIG_HOME", &xdg);
+            } else {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            }
+            assert_eq!(default_config_dir(), base);
+            let (cfg, path) = load_config_with_path();
+            let toml_path = base.join("hyprcircl.toml");
+            assert_eq!(path.as_deref(), Some(toml_path.to_string_lossy().as_ref()));
+            assert_eq!(cfg.inner_radius, 33.0);
+            let css = find_css_path(path.as_deref()).expect("css found");
+            assert_eq!(css, base.join("hyprcircl.css").to_string_lossy());
+            let theme = crate::theme::Theme::from_css(&std::fs::read_to_string(&css).unwrap());
+            assert_eq!(theme.pill_separator.3, 0.0);
+            std::fs::remove_dir_all(&base).expect("cleanup");
+        }
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        match saved_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn find_css_path_returns_existing_or_none() {
         let _guard = env_lock();
         // Must never panic and only ever return an existing path.

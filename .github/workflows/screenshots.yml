@@ -41,13 +41,19 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        run: cargo build
+      - name: Build (release)
+        run: cargo build --release
 
       - name: Render
-        run: scripts/screenshots/render.sh target/debug/hyprcircl out
+        run: scripts/screenshots/render.sh target/release/hyprcircl out
+
+      # A user's ~/.config/hyprcircl (via $XDG_CONFIG_HOME) is loaded by the
+      # release binary, and its hyprcircl.css still drives every knob.
+      - name: Check user config dir and CSS overrides
+        run: scripts/screenshots/check-user-config.py target/release/hyprcircl out
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: screenshots
           path: out/*.png

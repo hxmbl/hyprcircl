@@ -89,7 +89,8 @@ shows the menu; launching it again toggles visibility.
 ### Quick start
 
 ```sh
-hyprcircl init          # writes ~/.config/hyprcircl/{hyprcircl.toml,hyprcircl.css}
+hyprcircl init          # writes $XDG_CONFIG_HOME/hyprcircl/{hyprcircl.toml,hyprcircl.css}
+                        # (~/.config/hyprcircl/ when XDG_CONFIG_HOME is unset)
 hyprcircl config path   # print which config file is active
 ```
 
@@ -103,6 +104,8 @@ hyprcircl config path   # print which config file is active
 | `quit` | Stop the background daemon |
 | `init` | Create starter config + theme (`--force` to overwrite) |
 | `config path` | Print active config path |
+| `config check` | Validate the config and report unknown keys or bad values |
+| `preview OUT.png` | Render one frame to a PNG without a compositor (`--size`, `--scale`, `--open`, `--hover`, `--background`, `--center`; see `hyprcircl --help`) |
 
 Options: `-c` / `--config PATH` (or `HYPRCIRCL_CONFIG`), `--help`, `--version`.
 
@@ -201,23 +204,37 @@ strings, `\n` and friends are TOML escapes and reach the shell changed.
 
 ## Theming (CSS)
 
-Visual styling lives in a `hyprcircl.css` file placed next to your
-`hyprcircl.toml` (e.g. `~/.config/hyprcircl/hyprcircl.css`). It is watched and
-reloaded live. A reference theme ships in [`hyprcircl.css`](./hyprcircl.css).
+Visual styling lives in `hyprcircl.css`, read from the directory of the
+`hyprcircl.toml` that loaded, otherwise from the first config directory that
+has one: `$XDG_CONFIG_HOME/hyprcircl/hyprcircl.css`, then
+`~/.config/hyprcircl/hyprcircl.css`, then `./hyprcircl.css`. With no file, the
+built-in theme is used, and it is identical to the shipped
+[`hyprcircl.css`](./hyprcircl.css), which documents every property. The file
+is watched and reloaded live.
 
-Supported selectors:
+hyprcircl reads this file with its own small CSS parser and draws everything
+itself, so only the selectors and properties below have an effect; other GTK
+CSS is ignored. Later rules win over earlier ones.
 
-- `.item` — wedge fill (use `border-radius` to round corners)
-- `.item:hover` — wedge under the pointer
-- `.item:active` — open ring (non-hovered wedges)
-- `.item:selected` — parent wedge leading into an open submenu
-- `.item-stroke` — wedge outline (`border-color`, `border-width`)
-- `.icon` — the Nerd Font glyph (`color`, `font-size`, `font-family`, `font-weight`)
-- `.label` — the text label (`display: none;` hides labels)
-- `.pill` — the status pill (`background-color`, `color`, `border-color`,
-  `border-width`, `height`, `padding`, `margin-top`, `border-radius`, `font-*`,
-  `--module-gap` for spacing, and `--separator-color` for the hairline between
-  modules; `transparent` hides it)
+| Selector | Properties |
+| -------- | ---------- |
+| `.backdrop` (or `window`) | `background-color`: tint over the desktop while the menu is open; `transparent` turns it off |
+| `.shadow` | `color`, `--size` (spread), `--offset-y`; `display: none` removes it |
+| `.item` | `background-color` of rings you've passed through; `border-radius` rounds wedge corners |
+| `.item:active` | fill of the ring you're choosing from |
+| `.item:hover` (or `:focus`) | fill of the wedge under the pointer / keyboard selection |
+| `.item:selected` | fill of the wedge whose submenu is open |
+| `.item-stroke` | wedge outline: `border-color` (or `color`), `border-width`; per state with `.item:hover .item-stroke` / `.item:selected .item-stroke` |
+| `.icon` | the Nerd Font glyph: `color`, `font-family`, `font-size`, `font-weight`; per state with `.item:hover .icon` / `.item:selected .icon` |
+| `.label` | the text under the icon: `color`, `font-*`, `margin-top` (space below the icon), `display: none` hides labels; per state like `.icon` |
+| `.pill` | the status pill: `background-color`, `color`, `border-color`, `border-width`, `font-*`, `height`, `padding`, `margin-top` (distance above the ring), `border-radius`, `--module-gap` (spacing between modules) and `--separator-color` (hairline between modules; `transparent` hides it) |
+
+The hovered and selected wedges have their own icon, label and outline
+colours, so a theme that changes `.item:hover` usually wants
+`.item:hover .icon` and `.item:hover .label` too.
+
+Ring geometry (radii, gaps, animation) and whether labels show at all are in
+the TOML's [`[menu]`](#menu-ring-geometry-and-behaviour) table.
 
 Colors accept `#rgb` / `#rrggbb` / `#rrggbbaa`, `rgb()` / `rgba()` (channels as
 standard 0–255 numbers, percentages, or the 0..1 floats used by the shipped
@@ -250,7 +267,9 @@ theme), `hsl()` / `hsla()`, or CSS color names. Sizes accept plain numbers,
 | `src/window.rs` | Platform-specific overlay window setup. |
 | `src/cursor.rs` | Cursor position in display-local coordinates (Linux). |
 | `src/process.rs` | Shell command execution and process-group management. |
-| `.github/` | CI workflow (`lint` + `test`) and the Linux layer-shell setup action. |
+| `src/preview.rs` | `hyprcircl preview`: renders one frame to PNG with the live drawing code. |
+| `scripts/screenshots/` | `render.sh` (docs screenshots) and `check-user-config.py` (renders a user config dir and checks its CSS/TOML overrides pixel by pixel). |
+| `.github/` | CI workflow (`lint` + `test`), the Screenshots workflow (release build, renders, user-config check) and the Linux layer-shell setup action. |
 
 ## License
 

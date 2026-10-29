@@ -104,10 +104,14 @@ pub fn run(opts: PreviewOptions) -> Result<(), String> {
     let (cfg, cfg_path) = load_config_with_path();
     let theme = match find_css_path(cfg_path.as_deref()) {
         Some(css) => {
+            println!("[CSS] Loading {css}");
             let text = std::fs::read_to_string(&css).map_err(|e| format!("{css}: {e}"))?;
             Theme::from_css(&text)
         }
-        None => Theme::default(),
+        None => {
+            println!("[CSS] No hyprcircl.css found, using the built-in theme");
+            Theme::default()
+        }
     };
     let stack = nav_stack(&cfg, &opts.open)?;
     let outputs = bar_outputs(&cfg);

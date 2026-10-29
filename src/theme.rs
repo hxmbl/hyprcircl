@@ -1161,6 +1161,79 @@ mod tests {
     }
 
     #[test]
+    fn user_css_still_reaches_every_knob() {
+        // Every property the GTK-era theme understood, plus the new ones, set
+        // from a user file. A knob that stops parsing fails here.
+        let css = r#"
+            window { background-color: rgba(10, 20, 30, 0.5); }
+            .shadow { color: #010203; --size: 9px; --offset-y: 7px; }
+            .pill {
+                background: #112233; color: #445566; border-color: #778899;
+                border-width: 3px; font-family: "Fira Sans", sans-serif;
+                font-size: 15pt; font-weight: bold; height: 44px; padding: 21px;
+                margin-top: 31px; border-radius: 5px; gap: 27px;
+                --separator-color: transparent;
+            }
+            .item { background-color: #100000; border-radius: 4px; }
+            .item:focus { background-color: #200000; }
+            .item:active { background-color: #300000; }
+            .item:selected { background-color: #400000; }
+            .item-stroke { color: #500000; border-width: 2.5px; }
+            .item:hover .item-stroke { border-color: #510000; }
+            .item:selected .item-stroke { border-color: #520000; }
+            #icon { color: #600000; font-family: Noto Sans; font-size: 22pt; font-weight: 300; }
+            .item:hover .icon { color: #610000; }
+            .item:selected .icon { color: #620000; }
+            .label { color: #700000; font-family: Cantarell; font-size: 9pt;
+                     font-weight: normal; margin-top: 6px; display: none; }
+            .item:hover .label { color: #710000; }
+            .item:selected .label { color: #720000; }
+        "#;
+        let t = Theme::from_css(css);
+        let hex = |r: u8, g: u8, b: u8| (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0, 1.0);
+        let red = |r: u8| hex(r, 0, 0);
+        assert!(approx(
+            t.backdrop,
+            (10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0, 0.5)
+        ));
+        assert!(approx(t.shadow_color, hex(1, 2, 3)));
+        assert_eq!((t.shadow_size, t.shadow_offset_y), (9.0, 7.0));
+        assert!(approx(t.pill_bg, hex(0x11, 0x22, 0x33)));
+        assert!(approx(t.pill_fg, hex(0x44, 0x55, 0x66)));
+        assert!(approx(t.pill_stroke, hex(0x77, 0x88, 0x99)));
+        assert_eq!(t.pill_stroke_width, 3.0);
+        assert_eq!(t.pill_font, "Fira Sans");
+        assert_eq!((t.pill_font_size, t.pill_font_weight), (15.0, 700));
+        assert_eq!((t.pill_height, t.pill_padding_x), (44.0, 21.0));
+        assert_eq!(
+            (t.pill_offset_y, t.pill_corner, t.pill_gap),
+            (31.0, 5.0, 27.0)
+        );
+        assert_eq!(t.pill_separator.3, 0.0);
+        assert!(approx(t.item_default, red(0x10)));
+        assert!(approx(t.item_hover, red(0x20)));
+        assert!(approx(t.item_active, red(0x30)));
+        assert!(approx(t.item_selected, red(0x40)));
+        assert_eq!(t.item_corner, 4.0);
+        assert!(approx(t.item_stroke, red(0x50)));
+        assert!(approx(t.item_stroke_hover, red(0x51)));
+        assert!(approx(t.item_stroke_selected, red(0x52)));
+        assert_eq!(t.item_stroke_width, 2.5);
+        assert!(approx(t.icon_color, red(0x60)));
+        assert!(approx(t.icon_hover, red(0x61)));
+        assert!(approx(t.icon_selected, red(0x62)));
+        assert_eq!(t.icon_font, "Noto Sans");
+        assert_eq!((t.icon_font_size, t.icon_font_weight), (22.0, 300));
+        assert!(approx(t.label_color, red(0x70)));
+        assert!(approx(t.label_hover, red(0x71)));
+        assert!(approx(t.label_selected, red(0x72)));
+        assert_eq!(t.label_font, "Cantarell");
+        assert_eq!((t.label_font_size, t.label_font_weight), (9.0, 400));
+        assert_eq!(t.label_gap, 6.0);
+        assert!(!t.label_visible);
+    }
+
+    #[test]
     fn shipped_css_matches_builtin_theme() {
         // hyprcircl.css documents the built-in look; a missing or empty file
         // must look identical to the shipped one.
