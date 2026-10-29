@@ -55,10 +55,10 @@ done
 '''
 
 # Focused window's title, live from the same socket; hidden on an empty
-# workspace. Long titles are cut at 28 characters.
+# workspace. Long titles are cut at 24 characters.
 [[bar.modules]]
 format = "󱂬 {output}"
-max_length = 28
+max_length = 24
 stream_command = '''
 echo "$(hyprctl activewindow | awk '/^[ \t]*title: / { sub(/^[ \t]*title: /, ""); print; exit }')"
 S="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"

@@ -786,7 +786,10 @@ mod tests {
         let outputs = vec!["a long window title\n".to_string(), "2".to_string()];
         let layout =
             top_bar_layout(&cfg, &Theme::default(), 100.0, &outputs, 500.0, 500.0).expect("layout");
-        assert_eq!(layout.texts, vec!["A a lon…".to_string(), "B 2".to_string()]);
+        assert_eq!(
+            layout.texts,
+            vec!["A a lon…".to_string(), "B 2".to_string()]
+        );
     }
 
     #[test]

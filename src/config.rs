@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(cfg.items[0].label, "Terminal");
         // Workspace, window title, clock, network, volume, battery.
         assert_eq!(cfg.top_bar.modules.len(), 6);
-        assert_eq!(cfg.top_bar.modules[1].max_length, 28);
+        assert_eq!(cfg.top_bar.modules[1].max_length, 24);
         assert!(cfg.show_labels);
         assert!(!cfg.notify_only);
         assert!(!cfg.items.is_empty());
