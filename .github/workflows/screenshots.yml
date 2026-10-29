@@ -20,6 +20,7 @@ jobs:
   render:
     name: Render screenshots
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -44,13 +45,15 @@ jobs:
       - name: Build (release)
         run: cargo build --release
 
-      - name: Render
-        run: scripts/screenshots/render.sh target/release/hyprcircl out
-
       # A user's ~/.config/hyprcircl (via $XDG_CONFIG_HOME) is loaded by the
       # release binary, and its hyprcircl.css still drives every knob.
       - name: Check user config dir and CSS overrides
         run: scripts/screenshots/check-user-config.py target/release/hyprcircl out
+        timeout-minutes: 5
+
+      - name: Render
+        run: scripts/screenshots/render.sh target/release/hyprcircl out
+        timeout-minutes: 5
 
       - uses: actions/upload-artifact@v4
         if: always()

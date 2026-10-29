@@ -331,10 +331,14 @@ def main():
         with open(os.path.join(xdg_dir, "hyprcircl.css"), "a") as f:
             f.write("\n.pill { background-color: #00ff00; }\n")
         time.sleep(2)
-        daemon.terminate()
-        sway.terminate()
-        daemon.wait(10)
-        sway.wait(10)
+        for proc in (daemon, sway):
+            proc.terminate()
+        for proc in (daemon, sway):
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(5)
         logf.seek(0)
         log = logf.read()
         print("--- daemon log ---\n" + "\n".join(

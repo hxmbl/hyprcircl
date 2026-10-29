@@ -76,8 +76,15 @@ CONF
     "$bin" >"$run/hyprcircl.log" 2>&1 &
   hc_pid=$!
   sleep 3 # open animation + first bar refresh
-  XDG_RUNTIME_DIR="$run" WAYLAND_DISPLAY="$(basename "$sock")" grim "$out/live-root-$tag.png"
+  # grim waits for a frame the compositor may never present; never hang CI.
+  XDG_RUNTIME_DIR="$run" WAYLAND_DISPLAY="$(basename "$sock")" \
+    timeout 20 grim "$out/live-root-$tag.png" || echo "grim: no capture (exit $?)" >&2
   kill "$hc_pid" "$sway_pid" 2>/dev/null || true
+  for _ in $(seq 50); do
+    kill -0 "$hc_pid" 2>/dev/null || kill -0 "$sway_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -9 "$hc_pid" "$sway_pid" 2>/dev/null || true
   wait "$hc_pid" "$sway_pid" 2>/dev/null || true
   grep -E "CONFIG|THEME|CSS|rror" "$run/hyprcircl.log" >&2 || true
   rm -rf "$run"
