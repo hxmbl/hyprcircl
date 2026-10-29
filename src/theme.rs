@@ -31,6 +31,12 @@ pub type Rgba = (f64, f64, f64, f64);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
+    /// Full-screen tint behind the menu (`.backdrop` or `window`
+    /// `{ background-color }`); transparent disables it.
+    pub backdrop: Rgba,
+    /// Full-screen tint behind the menu (`.backdrop` or `window`
+    /// `{ background-color }`); transparent disables it.
+    pub backdrop: Rgba,
     /// Top pill (Waybar-style bar) background / text.
     pub pill_bg: Rgba,
     pub pill_fg: Rgba,
@@ -45,6 +51,9 @@ pub struct Theme {
     pub pill_corner: f64,
     /// Horizontal gap between pill modules.
     pub pill_gap: f64,
+    /// Pill outline (`.pill { border-color; border-width }`); width 0 = none.
+    pub pill_stroke: Rgba,
+    pub pill_stroke_width: f64,
 
     /// Radial item fills by state.
     pub item_default: Rgba,
@@ -52,19 +61,33 @@ pub struct Theme {
     pub item_active: Rgba,
     pub item_selected: Rgba,
 
-    /// Item outline (stroke).
+    /// Item outline (stroke), by state (`.item:hover .item-stroke`, ...).
     pub item_stroke: Rgba,
+    pub item_stroke_hover: Rgba,
+    pub item_stroke_selected: Rgba,
     pub item_stroke_width: f64,
     pub item_corner: f64,
 
-    /// Item icon glyphs.
+    /// Soft shadow under each ring (`.shadow { color; --size; --offset-y }`).
+    pub shadow_color: Rgba,
+    pub shadow_size: f64,
+    pub shadow_offset_y: f64,
+
+    /// Item icon glyphs; hover/selected colours come from
+    /// `.item:hover .icon` / `.item:selected .icon`.
     pub icon_color: Rgba,
+    pub icon_hover: Rgba,
+    pub icon_selected: Rgba,
     pub icon_font: String,
     pub icon_font_size: f64,
     pub icon_font_weight: i32,
 
-    /// Item text labels.
+    /// Item text labels (same per-state selectors as `.icon`).
     pub label_color: Rgba,
+    pub label_hover: Rgba,
+    pub label_selected: Rgba,
+    /// Space between icon and label (`.label { margin-top }`).
+    pub label_gap: f64,
     pub label_font: String,
     pub label_font_size: f64,
     pub label_font_weight: i32,
@@ -72,34 +95,56 @@ pub struct Theme {
     pub label_visible: bool,
 }
 
+// Palette of the shipped theme (hyprcircl.css mirrors these exactly, so a
+// missing or empty CSS file looks the same as the default one).
+const TEXT: Rgba = (202.0 / 255.0, 211.0 / 255.0, 245.0 / 255.0, 1.0); // #cad3f5
+const SUBTEXT: Rgba = (165.0 / 255.0, 173.0 / 255.0, 203.0 / 255.0, 1.0); // #a5adcb
+const ACCENT: Rgba = (138.0 / 255.0, 173.0 / 255.0, 244.0 / 255.0, 1.0); // #8aadf4
+const ON_ACCENT: Rgba = (24.0 / 255.0, 25.0 / 255.0, 38.0 / 255.0, 1.0); // #181926
+const SURFACE: (f64, f64, f64) = (30.0 / 255.0, 32.0 / 255.0, 48.0 / 255.0); // #1e2030
+
 impl Default for Theme {
     fn default() -> Self {
+        let (sr, sg, sb) = SURFACE;
         Self {
-            pill_bg: (0.15, 0.15, 0.2, 0.9),
-            pill_fg: (0.9, 0.9, 0.95, 1.0),
+            backdrop: (0.0, 0.0, 0.0, 0.18),
+            pill_bg: (sr, sg, sb, 0.88),
+            pill_fg: TEXT,
             pill_font: DEFAULT_FONT.into(),
-            pill_font_size: 13.0,
-            pill_font_weight: 700,
-            pill_height: 28.0,
-            pill_padding_x: 14.0,
-            pill_offset_y: 24.0,
-            pill_corner: 14.0,
+            pill_font_size: 10.0,
+            pill_font_weight: 600,
+            pill_height: 34.0,
+            pill_padding_x: 16.0,
+            pill_offset_y: 16.0,
+            pill_corner: 17.0,
             pill_gap: 18.0,
-            item_default: (0.85, 0.85, 0.88, 0.9),
-            item_hover: (0.48, 0.63, 0.96, 0.95),
-            item_active: (0.85, 0.85, 0.88, 0.9),
-            item_selected: (0.88, 0.29, 0.29, 0.95),
-            item_stroke: (0.7, 0.7, 0.75, 1.0),
-            item_stroke_width: 1.5,
-            item_corner: 8.0,
-            icon_color: (0.05, 0.05, 0.1, 1.0),
+            pill_stroke: (TEXT.0, TEXT.1, TEXT.2, 0.10),
+            pill_stroke_width: 1.0,
+            item_default: (sr, sg, sb, 0.66),
+            item_hover: (ACCENT.0, ACCENT.1, ACCENT.2, 0.96),
+            item_active: (sr, sg, sb, 0.88),
+            item_selected: (ACCENT.0, ACCENT.1, ACCENT.2, 0.30),
+            item_stroke: (TEXT.0, TEXT.1, TEXT.2, 0.10),
+            item_stroke_hover: (ACCENT.0, ACCENT.1, ACCENT.2, 1.0),
+            item_stroke_selected: (ACCENT.0, ACCENT.1, ACCENT.2, 0.70),
+            item_stroke_width: 1.0,
+            item_corner: 10.0,
+            shadow_color: (0.0, 0.0, 0.0, 0.32),
+            shadow_size: 22.0,
+            shadow_offset_y: 4.0,
+            icon_color: TEXT,
+            icon_hover: ON_ACCENT,
+            icon_selected: TEXT,
             icon_font: DEFAULT_FONT.into(),
-            icon_font_size: 20.0,
-            icon_font_weight: 700,
-            label_color: (0.15, 0.15, 0.2, 0.85),
+            icon_font_size: 17.0,
+            icon_font_weight: 400,
+            label_color: SUBTEXT,
+            label_hover: ON_ACCENT,
+            label_selected: TEXT,
+            label_gap: 3.0,
             label_font: DEFAULT_FONT.into(),
             label_font_size: 8.0,
-            label_font_weight: 700,
+            label_font_weight: 600,
             label_visible: true,
         }
     }
@@ -399,7 +444,9 @@ fn parse_rules(toks: &[Tok]) -> Vec<Rule> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Element {
+    Backdrop,
     Pill,
+    Shadow,
     Item,
     Stroke,
     Icon,
@@ -441,14 +488,18 @@ fn match_selector(sel: &[Tok]) -> Option<Target> {
         Element::Stroke
     } else if classes.iter().any(|c| c == "pill") {
         Element::Pill
+    } else if classes.iter().any(|c| c == "shadow") {
+        Element::Shadow
     } else if classes.iter().any(|c| c == "icon") {
         Element::Icon
     } else if classes.iter().any(|c| c == "label") {
         Element::Label
     } else if classes.iter().any(|c| c == "item") {
         Element::Item
-    } else if bare.iter().any(|s| s == "window" || s == "body") {
-        return None; // window-level styling is handled by GTK's CSS engine
+    } else if classes.iter().any(|c| c == "backdrop")
+        || bare.iter().any(|s| s == "window" || s == "body")
+    {
+        Element::Backdrop
     } else {
         return None;
     };
@@ -524,6 +575,49 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
                     theme.pill_gap = n;
                 }
             }
+            "border-color" => {
+                if let Some(c) = color {
+                    theme.pill_stroke = c;
+                }
+            }
+            "border-width" => {
+                if let Some(n) = number(vals) {
+                    theme.pill_stroke_width = n;
+                }
+            }
+            _ => {}
+        },
+        (Element::Backdrop, _) => {
+            if prop == "background-color" || prop == "background" {
+                if let Some(c) = color {
+                    theme.backdrop = c;
+                }
+            }
+        }
+        (Element::Backdrop, _) => {
+            if prop == "background-color" || prop == "background" {
+                if let Some(c) = color {
+                    theme.backdrop = c;
+                }
+            }
+        }
+        (Element::Shadow, _) => match prop {
+            "color" | "background-color" => {
+                if let Some(c) = color {
+                    theme.shadow_color = c;
+                }
+            }
+            "--size" | "--blur" => {
+                if let Some(n) = number(vals) {
+                    theme.shadow_size = n.max(0.0);
+                }
+            }
+            "--offset-y" => {
+                if let Some(n) = number(vals) {
+                    theme.shadow_offset_y = n;
+                }
+            }
+            "display" if display_none(vals) => theme.shadow_size = 0.0,
             _ => {}
         },
         (Element::Item, state) => {
@@ -542,10 +636,14 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
                 }
             }
         }
-        (Element::Stroke, _) => match prop {
+        (Element::Stroke, state) => match prop {
             "border-color" | "color" => {
                 if let Some(c) = color {
-                    theme.item_stroke = c;
+                    match state {
+                        State::Hover => theme.item_stroke_hover = c,
+                        State::Selected => theme.item_stroke_selected = c,
+                        _ => theme.item_stroke = c,
+                    }
                 }
             }
             "border-width" => {
@@ -555,10 +653,14 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
             }
             _ => {}
         },
-        (Element::Icon, _) => match prop {
+        (Element::Icon, state) => match prop {
             "color" => {
                 if let Some(c) = color {
-                    theme.icon_color = c;
+                    match state {
+                        State::Hover => theme.icon_hover = c,
+                        State::Selected => theme.icon_selected = c,
+                        _ => theme.icon_color = c,
+                    }
                 }
             }
             "font-family" => {
@@ -578,10 +680,19 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
             }
             _ => {}
         },
-        (Element::Label, _) => match prop {
+        (Element::Label, state) => match prop {
             "color" => {
                 if let Some(c) = color {
-                    theme.label_color = c;
+                    match state {
+                        State::Hover => theme.label_hover = c,
+                        State::Selected => theme.label_selected = c,
+                        _ => theme.label_color = c,
+                    }
+                }
+            }
+            "margin-top" => {
+                if let Some(n) = number(vals) {
+                    theme.label_gap = n;
                 }
             }
             "font-family" => {
@@ -1011,11 +1122,98 @@ mod tests {
     }
 
     #[test]
-    fn window_selector_is_ignored_by_theme() {
-        // Window-level styling is owned by GTK's CSS engine, not the theme.
-        let css = r#"window { background-color: rgba(1, 0, 0, 1); } body { color: blue; }"#;
+    fn window_selector_sets_backdrop() {
+        // `window { background-color }` (schema 1 docs) and `.backdrop` both
+        // tint the screen behind the menu; other window properties are ignored.
+        let css = r#"window { background-color: rgba(255, 0, 0, 0.5); } body { color: blue; }"#;
         let t = Theme::from_css(css);
-        assert_eq!(t, Theme::default());
+        assert!(approx(t.backdrop, (1.0, 0.0, 0.0, 0.5)));
+        let t = Theme::from_css(".backdrop { background-color: transparent; }");
+        assert_eq!(t.backdrop.3, 0.0);
+        let mut expected = Theme::default();
+        expected.backdrop = t.backdrop;
+        assert_eq!(t, expected);
+    }
+
+    #[test]
+    fn per_state_text_stroke_and_shadow() {
+        let css = r#"
+            .item:hover .icon { color: #ff0000; }
+            .item:selected .label { color: #00ff00; margin-top: 5px; }
+            .item:hover .item-stroke { border-color: #0000ff; }
+            .shadow { color: rgba(0, 0, 0, 0.5); --size: 30px; --offset-y: 2px; }
+            .pill { border-color: #ffffff; border-width: 2px; }
+        "#;
+        let t = Theme::from_css(css);
+        assert!(approx(t.icon_hover, (1.0, 0.0, 0.0, 1.0)));
+        assert!(approx(t.icon_color, Theme::default().icon_color));
+        assert!(approx(t.label_selected, (0.0, 1.0, 0.0, 1.0)));
+        assert_eq!(t.label_gap, 5.0);
+        assert!(approx(t.item_stroke_hover, (0.0, 0.0, 1.0, 1.0)));
+        assert!(approx(t.item_stroke, Theme::default().item_stroke));
+        assert!(approx(t.shadow_color, (0.0, 0.0, 0.0, 0.5)));
+        assert_eq!(t.shadow_size, 30.0);
+        assert_eq!(t.shadow_offset_y, 2.0);
+        assert_eq!(t.pill_stroke_width, 2.0);
+    }
+
+    #[test]
+    fn shipped_css_matches_builtin_theme() {
+        // hyprcircl.css documents the built-in look; a missing or empty file
+        // must look identical to the shipped one.
+        let shipped = Theme::from_css(include_str!("../hyprcircl.css"));
+        let d = Theme::default();
+        for (a, b, name) in [
+            (shipped.backdrop, d.backdrop, "backdrop"),
+            (shipped.pill_bg, d.pill_bg, "pill_bg"),
+            (shipped.pill_fg, d.pill_fg, "pill_fg"),
+            (shipped.pill_stroke, d.pill_stroke, "pill_stroke"),
+            (shipped.item_default, d.item_default, "item_default"),
+            (shipped.item_hover, d.item_hover, "item_hover"),
+            (shipped.item_active, d.item_active, "item_active"),
+            (shipped.item_selected, d.item_selected, "item_selected"),
+            (shipped.item_stroke, d.item_stroke, "item_stroke"),
+            (
+                shipped.item_stroke_hover,
+                d.item_stroke_hover,
+                "item_stroke_hover",
+            ),
+            (
+                shipped.item_stroke_selected,
+                d.item_stroke_selected,
+                "item_stroke_selected",
+            ),
+            (shipped.shadow_color, d.shadow_color, "shadow_color"),
+            (shipped.icon_color, d.icon_color, "icon_color"),
+            (shipped.icon_hover, d.icon_hover, "icon_hover"),
+            (shipped.icon_selected, d.icon_selected, "icon_selected"),
+            (shipped.label_color, d.label_color, "label_color"),
+            (shipped.label_hover, d.label_hover, "label_hover"),
+            (shipped.label_selected, d.label_selected, "label_selected"),
+        ] {
+            assert!(approx(a, b), "{name}: css {a:?} vs builtin {b:?}");
+        }
+        let mut s = shipped.clone();
+        // Colours compared approximately above; everything else exactly.
+        s.backdrop = d.backdrop;
+        s.pill_bg = d.pill_bg;
+        s.pill_fg = d.pill_fg;
+        s.pill_stroke = d.pill_stroke;
+        s.item_default = d.item_default;
+        s.item_hover = d.item_hover;
+        s.item_active = d.item_active;
+        s.item_selected = d.item_selected;
+        s.item_stroke = d.item_stroke;
+        s.item_stroke_hover = d.item_stroke_hover;
+        s.item_stroke_selected = d.item_stroke_selected;
+        s.shadow_color = d.shadow_color;
+        s.icon_color = d.icon_color;
+        s.icon_hover = d.icon_hover;
+        s.icon_selected = d.icon_selected;
+        s.label_color = d.label_color;
+        s.label_hover = d.label_hover;
+        s.label_selected = d.label_selected;
+        assert_eq!(s, d);
     }
 
     #[test]

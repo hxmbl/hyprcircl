@@ -1,112 +1,167 @@
 # =============================================================================
-# hyprcircl starter config
+# hyprcircl — radial menu + status pill for Hyprland
 #
-# Radial launcher for Hyprland. Edit this file freely — changes reload live.
-# Visual styling lives in hyprcircl.css next to this file (colors, fonts, etc.).
+#   bind = $mainMod, Space, exec, hyprcircl      # hyprland.conf
 #
-# Docs: https://github.com/hxmbl/hyprcircl  (or `hyprcircl --help`)
-# Bind in hyprland.conf:  bind = $mainMod, Space, exec, hyprcircl
+# Every key is optional: delete anything you don't care about and the built-in
+# value (this file) is used. Edits reload live. Colours, fonts, sizes of text
+# and the pill live in hyprcircl.css next to this file.
+# Icons are Nerd Font glyphs (https://www.nerdfonts.com/cheat-sheet).
 # =============================================================================
 
-schema_version = 1
+schema_version = 2
 
 # -----------------------------------------------------------------------------
-# Ring geometry — drag these until the menu feels good under your thumb.
-# The empty center is intentional. That's where your dignity goes.
+# [menu] — ring geometry and behaviour. Sizes are logical pixels (they scale
+# with your monitor's scale factor, so 1080p and HiDPI look the same).
 # -----------------------------------------------------------------------------
-inner_radius = 40.0
-outer_radius = 110.0
-ring_thickness = 60.0
-ring_gap = 8.0
-item_gap_degrees = 2.0
+[menu]
+inner_radius  = 60      # the empty hole in the middle
+outer_radius  = 156     # outer edge of the main ring (ring width = 96)
+submenu_width = 76      # width of each submenu ring that opens outside it
+ring_gap      = 8       # space between rings
+item_gap      = 6       # space between wedges (same width from hole to rim)
+animation_ms  = 160     # open/expand animation; 0 turns it off
+labels        = true    # text under icons
+keyboard      = true    # ←/→ or h/l, 1-9, Enter, Backspace, Esc
+notify_only   = false   # true = show a notification instead of running (dry run)
 
 # -----------------------------------------------------------------------------
-# Behavior
-# -----------------------------------------------------------------------------
-notify_only = false       # true = show a notification instead of running commands (safe mode)
-show_labels = true        # text under icons; turn off for a cleaner look
-keyboard_navigation = true  # arrows / 1-9 / Enter / Backspace
-
-# -----------------------------------------------------------------------------
-# Top status pill (Waybar-style modules)
+# [bar] — the status pill above the menu (Waybar-style modules).
 #
-# Each [[top_bar.modules]] runs `command` every `interval` seconds, or use
-# `stream_command` for live push updates. `{output}` in `format` is replaced.
-# Optional: on_click, on_click_right, on_scroll_up/down, watch = ["/path/to/file"]
+#   command         shell command; its stdout is the module text
+#   interval        seconds between runs (default 5)
+#   stream_command  long-running command; each stdout line replaces the text
+#   watch           files that trigger an immediate re-run (sysfs works)
+#   format          "{output}" is replaced by the text (default "{output}")
+#   on_click / on_click_right / on_scroll_up / on_scroll_down
+# Modules that print nothing are hidden, so missing hardware just disappears.
 # -----------------------------------------------------------------------------
-[top_bar]
+[bar]
 enabled = true
 
-# Live workspace number via Hyprland's event socket (needs jq + nc)
-[[top_bar.modules]]
-stream_command = "S=${HYPRLAND_INSTANCE_SIGNATURE:-$(hyprctl -j instances | jq -r '.[0].instance')}; hyprctl activeworkspace -j | jq -r '.id'; nc -U \"$XDG_RUNTIME_DIR/hypr/$S/.socket2.sock\" | while read -r line; do case \"$line\" in workspace>>*) echo \"${line#workspace>>}\";; workspacev2>>*) echo \"${line#workspacev2>>}\" | cut -d, -f1;; esac; done"
-interval = 1
-format = "󰖯 {output}"
-icon = ""
+# Active workspace, pushed live from Hyprland's event socket (socat or nc -U).
+[[bar.modules]]
+format = "󰕰 {output}"
+stream_command = """
+hyprctl activeworkspace | awk 'NR==1 {print $3}'
+S="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
+{ socat -u "UNIX-CONNECT:$S" - 2>/dev/null || nc -U "$S"; } | while read -r line; do
+  case "$line" in 'workspace>>'*) echo "${line#workspace>>}" ;; esac
+done
+"""
 
-# Clock — the module that never lies (until DST)
-[[top_bar.modules]]
-command = "date +'%a %H:%M'"
-interval = 30
-format = "{output}"
-icon = ""
+# Clock.
+[[bar.modules]]
+command = "date +'%a %d %b  %H:%M'"
+interval = 10
 
-# Battery — tweak BAT0 if your sysfs path differs (check /sys/class/power_supply/)
-[[top_bar.modules]]
-command = "s=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null); c=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null); [ -n \"$c\" ] && { [ \"$s\" = \"Charging\" ] && echo \"󰂄 $c%\" || echo \"󰁹 $c%\"; }"
+# Battery: first BAT* found; hidden on desktops.
+[[bar.modules]]
+command = """
+for b in /sys/class/power_supply/BAT*; do
+  [ -r "$b/capacity" ] || continue
+  [ "$(cat "$b/status")" = Charging ] && i='󰂄' || i='󰁹'
+  echo "$i $(cat "$b/capacity")%"; break
+done
+"""
 interval = 30
-format = "{output}"
-icon = ""
 watch = ["/sys/class/power_supply/BAT0/capacity", "/sys/class/power_supply/BAT0/status"]
 
-# Volume — PulseAudio/PipeWire via pactl (comment out if you don't use it)
-[[top_bar.modules]]
-command = "v=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oE '[0-9]+%' | head -1); m=$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'); [ \"$m\" = \"yes\" ] && echo muted || echo \"${v:-?}\""
+# Volume: PipeWire (wpctl), falling back to PulseAudio (pactl).
+# Right-click mutes, scroll changes the volume.
+[[bar.modules]]
+command = """
+if command -v wpctl >/dev/null; then
+  wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk '{ if ($3 == "[MUTED]") print "󰖁 muted"; else printf "󰕾 %d%%\n", $2 * 100 + 0.5 }'
+else
+  v=$(pactl get-sink-volume @DEFAULT_SINK@ | grep -oE '[0-9]+%' | head -1)
+  [ "$(pactl get-sink-mute @DEFAULT_SINK@ | awk '{print $2}')" = yes ] && echo "󰖁 muted" || echo "󰕾 $v"
+fi
+"""
 interval = 5
-format = "󰕾 {output}"
-icon = ""
-on_click_right = "pactl set-sink-mute @DEFAULT_SINK@ toggle"
-on_scroll_up = "pactl set-sink-volume @DEFAULT_SINK@ +5%"
-on_scroll_down = "pactl set-sink-volume @DEFAULT_SINK@ -5%"
+on_click_right = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle || pactl set-sink-mute @DEFAULT_SINK@ toggle"
+on_scroll_up = "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+ || pactl set-sink-volume @DEFAULT_SINK@ +5%"
+on_scroll_down = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- || pactl set-sink-volume @DEFAULT_SINK@ -5%"
 
 # -----------------------------------------------------------------------------
-# Radial menu items
+# Menu items, clockwise from the top. [[items.items]] opens a submenu ring.
 #
-# Top-level [[items]] = wedges on the root ring.
-# Nested [[items.items]] (and deeper) = outer submenu rings.
-# Icons are Nerd Font glyphs — install a Nerd Font or swap for emoji.
-# `command` is a program + args list; leave empty for submenu-only entries.
+#   command   a string runs through `sh -c` (pipes, $(...), ~ all work);
+#             a list like ["playerctl", "next"] is run directly
+#   fallback  tried in order when command's program isn't installed
 # -----------------------------------------------------------------------------
 
-# --- Apps (swap commands for whatever you actually have installed) -----------
 [[items]]
-label = "Apps"
-icon = "󰀻"
+label = "Terminal"
+icon = "󰆍"
+command = "$TERMINAL"
+fallback = ["ghostty", "kitty", "foot", "alacritty", "wezterm", "konsole", "gnome-terminal"]
+
+[[items]]
+label = "Browser"
+icon = "󰖟"
+command = "$BROWSER"
+fallback = ["firefox", "zen-browser", "chromium", "brave", "google-chrome-stable"]
+
+[[items]]
+label = "Files"
+icon = "󰉋"
+command = "nautilus"
+fallback = ["thunar", "dolphin", "nemo", "pcmanfm-qt", "xdg-open ~"]
+
+[[items]]
+label = "Capture"
+icon = "󰄀"
 
   [[items.items]]
-  label = "Terminal"
-  icon = "󰆍"
-  # foot, kitty, alacritty, ghostty, wezterm… pick your poison
-  command = ["foot"]
+  label = "Region"
+  icon = "󰒅"
+  command = "hyprshot -m region --clipboard-only"
+  fallback = ['grim -g "$(slurp)" - | wl-copy']
 
   [[items.items]]
-  label = "Browser"
-  icon = "󰖟"
-  # firefox, chromium, brave, zen… the internet is vast and full of trackers
-  command = ["firefox"]
+  label = "Window"
+  icon = "󰖯"
+  command = "hyprshot -m window --clipboard-only"
+  fallback = ['''grim -g "$(hyprctl -j activewindow | jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')" - | wl-copy''']
 
   [[items.items]]
-  label = "Files"
-  icon = "󰉋"
-  # thunar, nautilus, dolphin, pcmanfm-qt…
-  command = ["xdg-open", "."]
+  label = "Screen"
+  icon = "󰹑"
+  command = "hyprshot -m output --clipboard-only"
+  fallback = ["grim - | wl-copy"]
 
   [[items.items]]
-  label = "Editor"
-  icon = "󰈔"
-  command = ["xdg-open", ""]
+  label = "Colour"
+  icon = "󰈊"
+  command = "hyprpicker -a"
 
-# --- Hyprland window / layout actions (no extra apps required) ---------------
+[[items]]
+label = "Media"
+icon = "󰝚"
+
+  [[items.items]]
+  label = "Previous"
+  icon = "󰒮"
+  command = ["playerctl", "previous"]
+
+  [[items.items]]
+  label = "Play"
+  icon = "󰐎"
+  command = ["playerctl", "play-pause"]
+
+  [[items.items]]
+  label = "Next"
+  icon = "󰒭"
+  command = ["playerctl", "next"]
+
+  [[items.items]]
+  label = "Mute"
+  icon = "󰝟"
+  command = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+  fallback = ["pactl set-sink-mute @DEFAULT_SINK@ toggle"]
+
 [[items]]
 label = "Windows"
 icon = "󰖲"
@@ -122,79 +177,43 @@ icon = "󰖲"
   command = ["hyprctl", "dispatch", "fullscreen"]
 
   [[items.items]]
+  label = "Pin"
+  icon = "󰐃"
+  command = ["hyprctl", "dispatch", "pin"]
+
+  [[items.items]]
   label = "Close"
   icon = "󰅖"
   command = ["hyprctl", "dispatch", "killactive"]
 
   [[items.items]]
   label = "Workspace"
-  icon = "󰖯"
+  icon = "󰕰"
 
     [[items.items.items]]
-    label = "Prev"
+    label = "Previous"
     icon = "󰅁"
     command = ["hyprctl", "dispatch", "workspace", "e-1"]
+
+    [[items.items.items]]
+    label = "Empty"
+    icon = "󰐕"
+    command = ["hyprctl", "dispatch", "workspace", "empty"]
 
     [[items.items.items]]
     label = "Next"
     icon = "󰅂"
     command = ["hyprctl", "dispatch", "workspace", "e+1"]
 
-    [[items.items.items]]
-    label = "Empty"
-    icon = "󰖰"
-    command = ["hyprctl", "dispatch", "workspace", "empty"]
-
-# --- Media (playerctl — because nothing says "i use linux" like fighting dbus)
-[[items]]
-label = "Media"
-icon = "󰝚"
-
-  [[items.items]]
-  label = "Play/Pause"
-  icon = "󰐊"
-  command = ["playerctl", "play-pause"]
-
-  [[items.items]]
-  label = "Next"
-  icon = "󰒭"
-  command = ["playerctl", "next"]
-
-  [[items.items]]
-  label = "Previous"
-  icon = "󰒮"
-  command = ["playerctl", "previous"]
-
-# --- Screenshots (wayland classics: grim + slurp; delete if you lack them) ---
-[[items]]
-label = "Capture"
-icon = "󰄀"
-
-  [[items.items]]
-  label = "Region"
-  icon = "󰆍"
-  command = ["sh", "-c", "grim -g \"$(slurp)\" - | wl-copy"]
-
-  [[items.items]]
-  label = "Full"
-  icon = "󰹑"
-  command = ["sh", "-c", "grim - | wl-copy"]
-
-# --- Lock & power ------------------------------------------------------------
-[[items]]
-label = "Lock"
-icon = "󰌾"
-# hyprlock, swaylock, loginctl lock-session… whatever keeps roommates out
-command = ["loginctl", "lock-session"]
-
 [[items]]
 label = "Power"
 icon = "󰐥"
 
   [[items.items]]
-  label = "Log out"
-  icon = "󰍃"
-  command = ["hyprctl", "dispatch", "exit"]
+  label = "Lock"
+  icon = "󰌾"
+  command = "hyprlock"
+  fallback = ["swaylock -f", "loginctl lock-session"]
 
   [[items.items]]
   label = "Suspend"
@@ -202,11 +221,22 @@ icon = "󰐥"
   command = ["systemctl", "suspend"]
 
   [[items.items]]
+  label = "Log out"
+  icon = "󰍃"
+  command = ["hyprctl", "dispatch", "exit"]
+
+  [[items.items]]
   label = "Reboot"
   icon = "󰜉"
   command = ["systemctl", "reboot"]
 
   [[items.items]]
-  label = "Shutdown"
+  label = "Shut down"
   icon = "󰤂"
   command = ["systemctl", "poweroff"]
+
+[[items]]
+label = "Apps"
+icon = "󰀻"
+command = "fuzzel"
+fallback = ["walker", "anyrun", "wofi --show drun", "rofi -show drun", "tofi-drun --drun-launch=true"]

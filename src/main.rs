@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::{BufRead, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Command, Stdio};
@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use gdk4::Key;
 use gtk4::gdk;
 use gtk4::glib::{timeout_add_local, ControlFlow, Propagation};
-use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, CssProvider, DrawingArea, EventControllerKey,
@@ -21,22 +20,28 @@ mod config;
 mod cursor;
 mod draw;
 mod nav;
+mod preview;
 mod process;
 mod theme;
 mod window;
 
 use crate::config::{
-    find_css_path, init_user_config, load_config_with_path, resolved_config_path,
+    find_css_path, init_user_config, load_config_with_path, parse_config, resolved_config_path,
     set_config_override, watch_config, RadialConfig,
 };
 use crate::cursor::cursor_local_pos;
-use crate::draw::{
-    draw_rounded_sector, draw_top_bar, hit_test_pill, pango_extents, pango_measure, pango_show,
-    pango_weight, top_bar_layout,
-};
+use crate::draw::{hit_test_pill, top_bar_layout};
 use crate::nav::{get_item_angles, hit_test_index, LevelSelection};
 use crate::process::{kill_process_group, run_shell};
 use crate::theme::{watch_theme, Theme};
+
+/// Timestamps driving the open and submenu-expand animations.
+struct AnimState {
+    open_at: Instant,
+    expand_at: Instant,
+    /// Nav stack depth seen by the last frame.
+    depth: usize,
+}
 
 /// Directory for the single-instance socket: a per-user runtime directory
 /// when one exists (`XDG_RUNTIME_DIR`, then `TMPDIR` on macOS), falling back
@@ -340,6 +345,14 @@ COMMANDS:
     quit            Stop the background daemon
     init            Create ~/.config/hyprcircl/ with starter config + theme
     config path     Print the active (or default) config file path
+    config check    Validate the active config (exit 1 on errors)
+    preview <PNG>   Render the menu to a PNG without a compositor
+        --size WxH        canvas size in logical px (default 1920x1080)
+        --scale N         output scale, e.g. 2 for HiDPI (default 1)
+        --open I[,J..]    open submenus by item index from the root
+        --hover N         highlight wedge N on the deepest ring
+        --background PNG  wallpaper behind the menu
+        --center X,Y      menu centre (default: canvas centre)
 
 OPTIONS:
     -c, --config <PATH>   Use this config file (also HYPRCIRCL_CONFIG)
@@ -351,6 +364,7 @@ EXAMPLES:
     hyprcircl init --force
     hyprcircl --config ~/my-menu.toml
     hyprcircl config path
+    hyprcircl preview menu.png --open 4 --hover 1 --scale 2
 
 Hyprland keybinding:
     bind = $mainMod, Space, exec, hyprcircl
@@ -367,6 +381,90 @@ enum CliCommand {
     RunDaemon,
     Init { force: bool },
     ConfigPath,
+    ConfigCheck,
+    Preview(preview::PreviewOptions),
+}
+
+fn cli_fail(msg: &str) -> ! {
+    eprintln!("error: {msg}");
+    std::process::exit(2);
+}
+
+fn parse_preview(args: &mut Vec<String>) -> preview::PreviewOptions {
+    let mut opts = preview::PreviewOptions {
+        out: String::new(),
+        width: 1920,
+        height: 1080,
+        scale: 1.0,
+        open: Vec::new(),
+        hover: None,
+        background: None,
+        center: None,
+    };
+    while !args.is_empty() {
+        let flag = args.remove(0);
+        let mut value = || -> String {
+            if args.is_empty() {
+                cli_fail(&format!("{flag} needs a value"));
+            }
+            args.remove(0)
+        };
+        match flag.as_str() {
+            "--size" => {
+                let v = value();
+                let (w, h) = v
+                    .split_once('x')
+                    .unwrap_or_else(|| cli_fail("--size is WxH"));
+                opts.width = w.parse().unwrap_or_else(|_| cli_fail("--size is WxH"));
+                opts.height = h.parse().unwrap_or_else(|_| cli_fail("--size is WxH"));
+            }
+            "--scale" => {
+                opts.scale = value()
+                    .parse()
+                    .ok()
+                    .filter(|s: &f64| *s > 0.0)
+                    .unwrap_or_else(|| cli_fail("--scale is a positive number"));
+            }
+            "--open" => {
+                opts.open = value()
+                    .split(',')
+                    .map(|i| {
+                        i.trim()
+                            .parse()
+                            .unwrap_or_else(|_| cli_fail("--open is I[,J..]"))
+                    })
+                    .collect();
+            }
+            "--hover" => {
+                opts.hover = Some(value().parse().unwrap_or_else(|_| cli_fail("--hover is N")));
+            }
+            "--background" => opts.background = Some(value()),
+            "--center" => {
+                let v = value();
+                let (x, y) = v
+                    .split_once(',')
+                    .unwrap_or_else(|| cli_fail("--center is X,Y"));
+                opts.center = Some((
+                    x.parse().unwrap_or_else(|_| cli_fail("--center is X,Y")),
+                    y.parse().unwrap_or_else(|_| cli_fail("--center is X,Y")),
+                ));
+            }
+            "-c" | "--config" => set_config_override(value()),
+            other if other.starts_with('-') => {
+                cli_fail(&format!("unknown preview option '{other}'"))
+            }
+            other => {
+                if !opts.out.is_empty() {
+                    cli_fail("preview takes one output path");
+                }
+                opts.out = other.to_string();
+            }
+        }
+    }
+    if opts.out.is_empty() {
+        cli_fail("usage: hyprcircl preview <out.png> [options]");
+    }
+    opts
 }
 
 fn parse_cli() -> CliOptions {
@@ -427,11 +525,19 @@ fn parse_cli() -> CliOptions {
                 command = CliCommand::Init { force: false };
                 args.remove(0);
             }
+            "preview" => {
+                args.remove(0);
+                command = CliCommand::Preview(parse_preview(&mut args));
+            }
             "config" => {
                 args.remove(0);
                 match args.first().map(String::as_str) {
                     Some("path") => {
                         command = CliCommand::ConfigPath;
+                        args.remove(0);
+                    }
+                    Some("check") => {
+                        command = CliCommand::ConfigCheck;
                         args.remove(0);
                     }
                     Some(other) => {
@@ -467,6 +573,46 @@ fn main() {
     match cli.command {
         CliCommand::ConfigPath => {
             println!("{}", resolved_config_path().display());
+            return;
+        }
+        CliCommand::ConfigCheck => {
+            let path = resolved_config_path();
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                println!(
+                    "{}: not found; the built-in defaults are used",
+                    path.display()
+                );
+                return;
+            };
+            match parse_config(&text) {
+                Ok(cfg) => {
+                    for k in &cfg.unknown_keys {
+                        println!("{}: unknown key `{k}` (ignored)", path.display());
+                    }
+                    println!(
+                        "{}: OK (schema {}, {} items, {} bar modules)",
+                        path.display(),
+                        cfg.schema_version,
+                        cfg.items.len(),
+                        cfg.top_bar.modules.len()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("{}: {e}", path.display());
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        CliCommand::Preview(opts) => {
+            let out = opts.out.clone();
+            match preview::run(opts) {
+                Ok(()) => println!("Wrote {out}"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
             return;
         }
         CliCommand::Init { force } => match init_user_config(force) {
@@ -549,18 +695,10 @@ fn build_window(app: &Application) {
     if let Some(css_path) = find_css_path(config_file.as_deref()) {
         println!("[CSS] Loading {css_path}");
         if let Ok(css) = std::fs::read_to_string(&css_path) {
-            if let Some(display) = gdk::Display::default() {
-                // Window/widget-level rules go through GTK's own CSS engine.
-                let user_provider = CssProvider::new();
-                user_provider.load_from_data(&css);
-                gtk4::style_context_add_provider_for_display(
-                    &display,
-                    &user_provider,
-                    gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-                );
-            }
-            // The rest of the file (`.item`, `.pill`, `.icon`, ...) drives our
-            // Cairo drawing via the typed Theme.
+            // The whole file drives our Cairo drawing via the typed Theme
+            // (including `.backdrop` / `window { background-color }`). It is
+            // not handed to GTK's CSS engine, which only warned about the
+            // properties it doesn't know and could not be live-reloaded.
             if let Ok(mut t) = theme.write() {
                 *t = Theme::from_css(&css);
             }
@@ -894,6 +1032,13 @@ fn build_window(app: &Application) {
         });
     }
 
+    // Open/expand animation clock, shared by the renderer and show handler.
+    let anim = Rc::new(RefCell::new(AnimState {
+        open_at: Instant::now(),
+        expand_at: Instant::now(),
+        depth: 1,
+    }));
+
     let nav = nav_stack.clone();
     let h_idx = hover_index.clone();
     let config_draw = config.clone();
@@ -901,8 +1046,9 @@ fn build_window(app: &Application) {
     let center_draw = center_pos.clone();
     let theme_draw = theme.clone();
 
-    // Render Function
-    canvas.set_draw_func(move |_, cr, width, height| {
+    // Render Function (shared with `hyprcircl preview` via draw::draw_menu).
+    let anim_draw = anim.clone();
+    canvas.set_draw_func(move |area, cr, width, height| {
         let cfg = match config_draw.read() {
             Ok(c) => c,
             Err(_) => return,
@@ -933,107 +1079,42 @@ fn build_window(app: &Application) {
             Ok(s) => s,
             Err(_) => return,
         };
-        if stack.is_empty() {
-            return;
-        }
-
-        // Read hover state once per frame instead of once per wedge.
         let hover = h_idx.read().ok().and_then(|h| *h);
+        let outputs = bar_state_draw.lock().map(|s| s.clone()).unwrap_or_default();
 
-        // ===== TOP PILL =====
-        // Renders only at the root menu (nav stack depth == 1).
-        if cfg.top_bar.enabled && stack.len() == 1 {
-            let outputs = bar_state_draw.lock().map(|s| s.clone()).unwrap_or_default();
-            if let Some(layout) =
-                top_bar_layout(&cfg.top_bar, &theme, cfg.outer_radius, &outputs, cx, cy)
-            {
-                draw_top_bar(cr, &layout, &theme);
+        // Animation progress. A deeper nav stack than last frame means a
+        // submenu just opened: start its expand animation.
+        let (open, expand) = {
+            let mut a = anim_draw.borrow_mut();
+            if stack.len() > a.depth {
+                a.expand_at = Instant::now();
             }
-        }
-
-        // ===== RADIAL MENU RINGS =====
-        // Render each open level as a concentric ring of wedges.
-        let mut current_items = &cfg.items;
-
-        for level in 0..stack.len() {
-            let count = current_items.len();
-            if count == 0 {
-                break;
-            }
-
-            let (r_in, r_out) = cfg.get_level_radii(level);
-            let selected_child = stack[level].selected_child_index;
-            let parent_angle = stack[level].parent_mid_angle;
-            let is_active_level = level == stack.len() - 1;
-            let gap_rad = cfg.item_gap_degrees.to_radians();
-
-            for (i, item) in current_items.iter().enumerate() {
-                let (a1, a2) = get_item_angles(level, i, count, parent_angle, gap_rad);
-
-                draw_rounded_sector(cr, cx, cy, r_in, r_out, a1, a2, theme.item_corner);
-
-                // --- COLOR SELECTION ---
-                // Parent branch slice leading to an open submenu -> selected;
-                // hovered slice of the active ring -> hover; the active ring
-                // itself -> active; everything else -> default.
-                let color = if selected_child == Some(i) {
-                    theme.item_selected
-                } else if is_active_level && hover == Some(i) {
-                    theme.item_hover
-                } else if is_active_level {
-                    theme.item_active
+            a.depth = stack.len();
+            let dur = cfg.animation_ms as f64 / 1000.0;
+            let progress = |t: Instant| {
+                if dur <= 0.0 {
+                    1.0
                 } else {
-                    theme.item_default
-                };
-                cr.set_source_rgba(color.0, color.1, color.2, color.3);
-                let _ = cr.fill_preserve();
-
-                // Stroke
-                let stroke = theme.item_stroke;
-                cr.set_source_rgba(stroke.0, stroke.1, stroke.2, stroke.3);
-                cr.set_line_width(theme.item_stroke_width);
-                let _ = cr.stroke();
-
-                // Icon/Label via Pango (handles Nerd Font glyphs)
-                let mid_angle = (a1 + a2) / 2.0;
-                let mid_r = (r_in + r_out) / 2.0;
-                let tx = cx + mid_r * mid_angle.cos();
-                let ty = cy + mid_r * mid_angle.sin();
-
-                let icon_c = theme.icon_color;
-                cr.set_source_rgba(icon_c.0, icon_c.1, icon_c.2, icon_c.3);
-
-                // Center icon in wedge using its measured extents so the
-                // offsets hold for any font size.
-                let icon_size = (theme.icon_font_size * pango::SCALE as f64) as i32;
-                let icon_weight = pango_weight(theme.icon_font_weight);
-                let (icon_w, icon_h) =
-                    pango_extents(&theme.icon_font, icon_size, icon_weight, &item.icon);
-                cr.move_to(tx - icon_w / 2.0, ty - icon_h / 2.0 - 3.0);
-                pango_show(cr, &theme.icon_font, icon_size, icon_weight, &item.icon);
-
-                // Label below icon (smaller to avoid overflow).
-                // Hidden when TOML `show_labels` is off OR CSS sets `.label { display: none; }`.
-                if cfg.show_labels && theme.label_visible {
-                    let label_c = theme.label_color;
-                    cr.set_source_rgba(label_c.0, label_c.1, label_c.2, label_c.3);
-                    let label_size = (theme.label_font_size * pango::SCALE as f64) as i32;
-                    let label_weight = pango_weight(theme.label_font_weight);
-                    let label_w =
-                        pango_measure(&theme.label_font, label_size, label_weight, &item.label);
-                    cr.move_to(tx - label_w / 2.0, ty + icon_h / 2.0 + 1.0);
-                    pango_show(cr, &theme.label_font, label_size, label_weight, &item.label);
+                    (t.elapsed().as_secs_f64() / dur).min(1.0)
                 }
-            }
+            };
+            (progress(a.open_at), progress(a.expand_at))
+        };
 
-            // Descend to the open child level for the next iteration.
-            if let Some(child_idx) = selected_child {
-                if child_idx < current_items.len() {
-                    current_items = &current_items[child_idx].items;
-                } else {
-                    break;
-                }
-            }
+        let frame = draw::MenuFrame {
+            stack: &stack,
+            hover,
+            outputs: &outputs,
+            cx,
+            cy,
+            open,
+            expand,
+        };
+        draw::draw_menu(cr, &cfg, &theme, &frame, width as f64, height as f64);
+
+        // Keep frames coming until both animations settle.
+        if open < 1.0 || expand < 1.0 {
+            area.queue_draw();
         }
     });
 
@@ -1090,7 +1171,7 @@ fn build_window(app: &Application) {
         let dist = (dx * dx + dy * dy).sqrt();
 
         let new_hover = if dist >= r_in && dist <= r_out {
-            let gap_rad = cfg.item_gap_degrees.to_radians();
+            let gap_rad = cfg.gap_rad();
             let parent_angle = stack[current_level].parent_mid_angle;
             hit_test_index(
                 current_level,
@@ -1205,7 +1286,7 @@ fn build_window(app: &Application) {
         let dist = (dx * dx + dy * dy).sqrt();
 
         if dist >= r_in && dist <= r_out {
-            let gap_rad = cfg.item_gap_degrees.to_radians();
+            let gap_rad = cfg.gap_rad();
             let parent_angle = stack[current_level].parent_mid_angle;
 
             if let Some(idx) = hit_test_index(
@@ -1236,7 +1317,7 @@ fn build_window(app: &Application) {
                 } else {
                     // ACTION: either notify (safety mode) or execute the real command.
                     let label = clicked.label.clone();
-                    let command = clicked.command.clone();
+                    let command = clicked.resolved_command();
                     let notify_only = cfg.notify_only;
                     drop(stack);
                     drop(cfg);
@@ -1439,7 +1520,7 @@ fn build_window(app: &Application) {
                     let clicked = &items[idx];
                     if clicked.is_submenu() {
                         stack[current_level].selected_child_index = Some(idx);
-                        let gap_rad = cfg.item_gap_degrees.to_radians();
+                        let gap_rad = cfg.gap_rad();
                         let parent_angle = stack[current_level].parent_mid_angle;
                         let (a1, a2) =
                             get_item_angles(current_level, idx, items.len(), parent_angle, gap_rad);
@@ -1454,7 +1535,7 @@ fn build_window(app: &Application) {
                         cv_k.queue_draw();
                     } else {
                         let label = clicked.label.clone();
-                        let command = clicked.command.clone();
+                        let command = clicked.resolved_command();
                         let notify_only = cfg.notify_only;
                         drop(stack);
                         if notify_only {
@@ -1644,6 +1725,7 @@ fn build_window(app: &Application) {
         let nav_t = nav_stack.clone();
         let hover_t = hover_index.clone();
         let shown_t = shown.clone();
+        let anim_t = anim.clone();
         let pending_t = daemon_cmd.clone();
         timeout_add_local(Duration::from_millis(20), move || {
             let cmd = pending_t.swap(CMD_NONE, Ordering::Relaxed);
@@ -1668,6 +1750,11 @@ fn build_window(app: &Application) {
                     *hover = None;
                 }
                 window::set_keyboard_exclusive(&win_t, true);
+                {
+                    let mut a = anim_t.borrow_mut();
+                    a.open_at = Instant::now();
+                    a.depth = 1;
+                }
                 canvas_t.queue_draw();
                 win_t.present();
                 recenter_under_cursor(&win_t, &center_t);

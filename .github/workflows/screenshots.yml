@@ -1,0 +1,53 @@
+name: Screenshots
+
+# Renders the docs/screenshots images from the shipped config + theme, so a
+# look change can be reviewed from the PR's artifact. Only runs when
+# something that affects the look changes.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - hyprcircl.toml
+      - hyprcircl.css
+      - src/**
+      - scripts/screenshots/**
+      - .github/workflows/screenshots.yml
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  render:
+    name: Render screenshots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Linux layer shell dependencies
+        uses: ./.github/actions/setup-linux-layer-shell
+
+      - name: Install sway, grim and a Nerd Font
+        run: |
+          sudo apt-get install -y --no-install-recommends sway grim
+          mkdir -p ~/.local/share/fonts
+          curl -fsSL -o /tmp/jb.tar.xz \
+            https://github.com/ryanoasis/nerd-fonts/releases/download/v3.2.1/JetBrainsMono.tar.xz
+          tar -xJf /tmp/jb.tar.xz -C ~/.local/share/fonts
+          fc-cache -f
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build
+
+      - name: Render
+        run: scripts/screenshots/render.sh target/debug/hyprcircl out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: out/*.png

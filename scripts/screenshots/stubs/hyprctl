@@ -1,0 +1,7 @@
+#!/bin/sh
+# Demo stand-in for screenshots: a cursor in the middle of a 1920x1080 output.
+case "$*" in
+  *cursorpos*) echo '{"x": 960, "y": 600}' ;;
+  *monitors*) echo '[{"x": 0, "y": 0, "width": 1920, "height": 1080}]' ;;
+  *activeworkspace*) echo 'workspace ID 2 (2) on monitor HEADLESS-1:' ;;
+esac

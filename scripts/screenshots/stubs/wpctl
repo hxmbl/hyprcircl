@@ -1,0 +1,4 @@
+#!/bin/sh
+case "$*" in
+  *get-volume*) echo 'Volume: 0.64' ;;
+esac
