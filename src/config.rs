@@ -78,7 +78,7 @@ pub const DEFAULT_CONFIG_TOML: &str = include_str!("../hyprcircl.toml");
 /// Built-in geometry, also used for keys missing from a user's `[menu]`.
 pub const DEFAULT_INNER_RADIUS: f64 = 64.0;
 pub const DEFAULT_OUTER_RADIUS: f64 = 164.0;
-pub const DEFAULT_SUBMENU_WIDTH: f64 = 78.0;
+pub const DEFAULT_SUBMENU_WIDTH: f64 = 76.0;
 pub const DEFAULT_RING_GAP: f64 = 8.0;
 pub const DEFAULT_ITEM_GAP: f64 = 6.0;
 pub const DEFAULT_ANIMATION_MS: u64 = 160;
