@@ -34,8 +34,11 @@ notify_only   = false   # true = show a notification instead of running (dry run
 #   stream_command  long-running command; each stdout line replaces the text
 #   watch           files that trigger an immediate re-run (sysfs works)
 #   format          "{output}" is replaced by the text (default "{output}")
+#   max_length      longest text in characters, cut with "…" (default 0: no limit)
 #   on_click / on_click_right / on_scroll_up / on_scroll_down
 # Modules that print nothing are hidden, so missing hardware just disappears.
+# Commands are TOML literal strings (triple single quotes), so backslashes
+# reach the shell as typed.
 # -----------------------------------------------------------------------------
 [bar]
 enabled = true
@@ -43,46 +46,94 @@ enabled = true
 # Active workspace, pushed live from Hyprland's event socket (socat or nc -U).
 [[bar.modules]]
 format = "󰕰 {output}"
-stream_command = """
+stream_command = '''
 hyprctl activeworkspace | awk 'NR==1 {print $3}'
 S="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
 { socat -u "UNIX-CONNECT:$S" - 2>/dev/null || nc -U "$S"; } | while read -r line; do
   case "$line" in 'workspace>>'*) echo "${line#workspace>>}" ;; esac
 done
-"""
+'''
+
+# Focused window's title, live from the same socket; hidden on an empty
+# workspace. Long titles are cut at 28 characters.
+[[bar.modules]]
+format = "󱂬 {output}"
+max_length = 28
+stream_command = '''
+echo "$(hyprctl activewindow | awk '/^[ \t]*title: / { sub(/^[ \t]*title: /, ""); print; exit }')"
+S="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
+{ socat -u "UNIX-CONNECT:$S" - 2>/dev/null || nc -U "$S"; } | while read -r line; do
+  case "$line" in 'activewindow>>'*) echo "${line#activewindow>>*,}" ;; esac
+done
+'''
 
 # Clock.
 [[bar.modules]]
 command = "date +'%a %d %b  %H:%M'"
 interval = 10
 
-# Battery: first BAT* found; hidden on desktops.
+# Network: Wi-Fi name or "wired" from NetworkManager (nmcli), falling back to
+# sysfs + iw for iwd/networkd setups; "offline" when nothing is up.
 [[bar.modules]]
-command = """
-for b in /sys/class/power_supply/BAT*; do
-  [ -r "$b/capacity" ] || continue
-  [ "$(cat "$b/status")" = Charging ] && i='󰂄' || i='󰁹'
-  echo "$i $(cat "$b/capacity")%"; break
-done
-"""
-interval = 30
-watch = ["/sys/class/power_supply/BAT0/capacity", "/sys/class/power_supply/BAT0/status"]
+max_length = 20
+command = '''
+if command -v nmcli >/dev/null; then
+  nmcli -t -f TYPE,STATE,CONNECTION device 2>/dev/null | awk -F: '
+    $2 ~ /^connected/ && $1 == "wifi"     { print "󰖩 " $3; f = 1; exit }
+    $2 ~ /^connected/ && $1 == "ethernet" { print "󰈀 wired"; f = 1; exit }
+    END { if (!f) print "󰖪 offline" }'
+else
+  for n in /sys/class/net/*; do
+    [ "$(cat "$n/operstate" 2>/dev/null)" = up ] || continue
+    if [ -d "$n/wireless" ]; then
+      s=$(iw dev "${n##*/}" link 2>/dev/null | sed -n 's/^[[:space:]]*SSID: //p')
+      echo "󰖩 ${s:-wi-fi}"
+    else
+      echo "󰈀 wired"
+    fi
+    exit 0
+  done
+  echo "󰖪 offline"
+fi
+'''
+interval = 10
 
 # Volume: PipeWire (wpctl), falling back to PulseAudio (pactl).
 # Right-click mutes, scroll changes the volume.
 [[bar.modules]]
-command = """
+command = '''
 if command -v wpctl >/dev/null; then
-  wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk '{ if ($3 == "[MUTED]") print "󰖁 muted"; else printf "󰕾 %d%%\n", $2 * 100 + 0.5 }'
-else
-  v=$(pactl get-sink-volume @DEFAULT_SINK@ | grep -oE '[0-9]+%' | head -1)
-  [ "$(pactl get-sink-mute @DEFAULT_SINK@ | awk '{print $2}')" = yes ] && echo "󰖁 muted" || echo "󰕾 $v"
+  out=$(wpctl get-volume @DEFAULT_AUDIO_SINK@) || exit 0
+  v=$(echo "$out" | awk '{ printf "%d", $2 * 100 + 0.5 }')
+  case "$out" in *MUTED*) m=yes ;; esac
+elif command -v pactl >/dev/null; then
+  v=$(pactl get-sink-volume @DEFAULT_SINK@ | grep -oE '[0-9]+%' | head -1 | tr -d %)
+  m=$(pactl get-sink-mute @DEFAULT_SINK@ | awk '{print $2}')
 fi
-"""
+[ -n "$v" ] || exit 0
+if [ "$m" = yes ]; then echo "󰖁 muted"
+elif [ "$v" -lt 34 ]; then echo "󰕿 $v%"
+elif [ "$v" -lt 67 ]; then echo "󰖀 $v%"
+else echo "󰕾 $v%"; fi
+'''
 interval = 5
 on_click_right = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle || pactl set-sink-mute @DEFAULT_SINK@ toggle"
 on_scroll_up = "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+ || pactl set-sink-volume @DEFAULT_SINK@ +5%"
 on_scroll_down = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- || pactl set-sink-volume @DEFAULT_SINK@ -5%"
+
+# Battery: first BAT* found, icon follows the charge; hidden on desktops.
+[[bar.modules]]
+command = '''
+for b in /sys/class/power_supply/BAT*; do
+  [ -r "$b/capacity" ] || continue
+  c=$(cat "$b/capacity"); [ "$c" -gt 100 ] && c=100
+  if [ "$(cat "$b/status" 2>/dev/null)" = Charging ]; then i='󰂄'
+  else set -- 󰂎 󰁺 󰁻 󰁼 󰁽 󰁾 󰁿 󰂀 󰂁 󰂂 󰁹; shift $((c / 10)); i=$1; fi
+  echo "$i $c%"; break
+done
+'''
+interval = 30
+watch = ["/sys/class/power_supply/BAT0/capacity", "/sys/class/power_supply/BAT0/status"]
 
 # -----------------------------------------------------------------------------
 # Menu items, clockwise from the top. [[items.items]] opens a submenu ring.

@@ -10,7 +10,9 @@
 #                 (hover, open submenus), which headless sway can't inject
 #
 # A few stand-in commands (scripts/screenshots/stubs) give the status pill
-# stable demo values: workspace 2, 64% volume, a fixed clock.
+# stable demo values: workspace 2, a focused editor window, a fixed clock,
+# Wi-Fi "Home" and 64% volume. CI machines have no battery, so the config is
+# rendered from a copy whose battery module reads a fake sysfs (76%).
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +21,14 @@ bin="$(realpath "${1:-$root/target/debug/hyprcircl}")"
 out="$(realpath -m "${2:-$root/docs/screenshots}")"
 mkdir -p "$out"
 
-export HYPRCIRCL_CONFIG="$root/hyprcircl.toml"
+demo="$(mktemp -d)"
+trap 'rm -rf "$demo"' EXIT
+mkdir -p "$demo/power_supply/BAT0"
+echo 76 >"$demo/power_supply/BAT0/capacity"
+echo Discharging >"$demo/power_supply/BAT0/status"
+sed "s#/sys/class/power_supply#$demo/power_supply#g" "$root/hyprcircl.toml" >"$demo/hyprcircl.toml"
+cp "$root/hyprcircl.css" "$demo/hyprcircl.css"
+export HYPRCIRCL_CONFIG="$demo/hyprcircl.toml"
 export PATH="$here/stubs:$PATH"
 wall="$here/wallpaper.png"
 

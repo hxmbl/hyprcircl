@@ -51,6 +51,9 @@ pub struct Theme {
     /// Pill outline (`.pill { border-color; border-width }`); width 0 = none.
     pub pill_stroke: Rgba,
     pub pill_stroke_width: f64,
+    /// Hairline between pill modules (`.pill { --separator-color }`);
+    /// transparent hides it.
+    pub pill_separator: Rgba,
 
     /// Radial item fills by state.
     pub item_default: Rgba,
@@ -117,6 +120,7 @@ impl Default for Theme {
             pill_gap: 18.0,
             pill_stroke: (TEXT.0, TEXT.1, TEXT.2, 0.10),
             pill_stroke_width: 1.0,
+            pill_separator: (TEXT.0, TEXT.1, TEXT.2, 0.16),
             item_default: (sr, sg, sb, 0.66),
             item_hover: (ACCENT.0, ACCENT.1, ACCENT.2, 0.96),
             item_active: (sr, sg, sb, 0.88),
@@ -582,6 +586,11 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
                     theme.pill_stroke_width = n;
                 }
             }
+            "--separator-color" => {
+                if let Some(c) = color {
+                    theme.pill_separator = c;
+                }
+            }
             _ => {}
         },
         (Element::Backdrop, _) => {
@@ -1044,6 +1053,7 @@ mod tests {
                 margin-top: 30px;
                 border-radius: 16px;
                 --module-gap: 20px;
+                --separator-color: transparent;
             }
         "#;
         let t = Theme::from_css(css);
@@ -1057,6 +1067,7 @@ mod tests {
         assert_eq!(t.pill_offset_y, 30.0);
         assert_eq!(t.pill_corner, 16.0);
         assert_eq!(t.pill_gap, 20.0);
+        assert_eq!(t.pill_separator.3, 0.0);
     }
 
     #[test]
@@ -1160,6 +1171,7 @@ mod tests {
             (shipped.pill_bg, d.pill_bg, "pill_bg"),
             (shipped.pill_fg, d.pill_fg, "pill_fg"),
             (shipped.pill_stroke, d.pill_stroke, "pill_stroke"),
+            (shipped.pill_separator, d.pill_separator, "pill_separator"),
             (shipped.item_default, d.item_default, "item_default"),
             (shipped.item_hover, d.item_hover, "item_hover"),
             (shipped.item_active, d.item_active, "item_active"),
@@ -1191,6 +1203,7 @@ mod tests {
         s.pill_bg = d.pill_bg;
         s.pill_fg = d.pill_fg;
         s.pill_stroke = d.pill_stroke;
+        s.pill_separator = d.pill_separator;
         s.item_default = d.item_default;
         s.item_hover = d.item_hover;
         s.item_active = d.item_active;

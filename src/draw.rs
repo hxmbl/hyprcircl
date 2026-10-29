@@ -530,6 +530,19 @@ pub struct BarLayout {
     pub height: f64,
 }
 
+/// Cut `text` to at most `max` characters, ending in "…" when it was longer.
+/// Counts chars (not bytes), so multi-byte titles never split mid-glyph.
+/// `max == 0` means no limit.
+pub fn truncate_chars(text: &str, max: usize) -> String {
+    if max == 0 || text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('…');
+    cut
+}
+
 /// Measure a module string's rendered width for the pill font/size.
 fn measure_pill_text(theme: &Theme, text: &str) -> f64 {
     let size = (theme.pill_font_size * pango::SCALE as f64) as i32;
@@ -557,7 +570,10 @@ pub fn top_bar_layout(
     let mut texts = Vec::new();
     let mut indices = Vec::new();
     for (i, m) in cfg.modules.iter().enumerate() {
-        let out = outputs.get(i).cloned().unwrap_or_default();
+        let out = truncate_chars(
+            outputs.get(i).map(|o| o.trim()).unwrap_or_default(),
+            m.max_length,
+        );
         let has_placeholder = m.format.contains("{output}");
         let body = m.format.replace("{output}", &out);
         let text = if m.icon.is_empty() {
@@ -667,9 +683,29 @@ pub fn draw_top_bar(cr: &cairo::Context, layout: &BarLayout, theme: &Theme) {
 
     // Module text via Pango (handles Nerd Font glyphs correctly).
     let (fg_r, fg_g, fg_b, fg_a) = theme.pill_fg;
-    cr.set_source_rgba(fg_r, fg_g, fg_b, fg_a);
     let size = (theme.pill_font_size * pango::SCALE as f64) as i32;
     let weight = pango_weight(theme.pill_font_weight);
+
+    // Hairline separators centred in each gap: short (40% of the pill) and
+    // faint, so modules read as groups without boxing them in.
+    let (sr, sg, sb, sa) = theme.pill_separator;
+    if sa > 0.0 && layout.texts.len() > 1 {
+        let _ = cr.save();
+        cr.set_source_rgba(sr, sg, sb, sa);
+        cr.set_line_width(1.0);
+        let h = (height * 0.4).round();
+        let y0 = ry + (height - h) / 2.0;
+        let ends = layout.lefts.iter().zip(&layout.widths).map(|(l, w)| l + w);
+        for (end, next) in ends.zip(layout.lefts.iter().skip(1)) {
+            let x = ((end + next) / 2.0).round() + 0.5;
+            cr.move_to(x, y0);
+            cr.line_to(x, y0 + h);
+        }
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    }
+
+    cr.set_source_rgba(fg_r, fg_g, fg_b, fg_a);
     for (k, t) in layout.texts.iter().enumerate() {
         // Pango draws from the layout's top-left; centre the line box (not
         // the ink, so glyphs with different ink heights share a baseline).
@@ -732,6 +768,39 @@ mod tests {
         // Entirely outside the pill: no hit.
         assert_eq!(hit_test_pill(&layout, layout.rx - 5.0, mid_y), None);
         assert_eq!(hit_test_pill(&layout, x0, layout.ry - 5.0), None);
+    }
+
+    #[test]
+    fn truncate_chars_counts_characters() {
+        assert_eq!(truncate_chars("short", 0), "short");
+        assert_eq!(truncate_chars("short", 5), "short");
+        assert_eq!(truncate_chars("nvim draw.rs", 6), "nvim…");
+        // Multi-byte text is cut on character boundaries.
+        assert_eq!(truncate_chars("ééééé", 3), "éé…");
+    }
+
+    #[test]
+    fn max_length_truncates_module_output() {
+        let mut cfg = test_config();
+        cfg.modules[0].max_length = 6;
+        let outputs = vec!["a long window title\n".to_string(), "2".to_string()];
+        let layout =
+            top_bar_layout(&cfg, &Theme::default(), 100.0, &outputs, 500.0, 500.0).expect("layout");
+        assert_eq!(layout.texts, vec!["A a lon…".to_string(), "B 2".to_string()]);
+    }
+
+    #[test]
+    fn draw_top_bar_with_separators_renders() {
+        use gtk4::cairo::{Context, Format, ImageSurface};
+
+        let surface = ImageSurface::create(Format::ARgb32, 1000, 1000).expect("image surface");
+        let cr = Context::new(&surface).expect("context");
+        let outputs = vec!["1".to_string(), "2".to_string()];
+        let theme = Theme::default();
+        let layout =
+            top_bar_layout(&test_config(), &theme, 100.0, &outputs, 500.0, 500.0).expect("layout");
+        draw_top_bar(&cr, &layout, &theme);
+        assert!(theme.pill_separator.3 > 0.0);
     }
 
     #[test]

@@ -1,7 +1,9 @@
 #!/bin/sh
-# Demo stand-in for screenshots: a cursor in the middle of a 1920x1080 output.
+# Demo stand-in for screenshots: a cursor in the middle of a 1920x1080 output,
+# workspace 2 and a focused editor window.
 case "$*" in
   *cursorpos*) echo '{"x": 960, "y": 600}' ;;
   *monitors*) echo '[{"x": 0, "y": 0, "width": 1920, "height": 1080}]' ;;
   *activeworkspace*) echo 'workspace ID 2 (2) on monitor HEADLESS-1:' ;;
+  *activewindow*) printf 'Window 55d1a0 -> nvim:\n\tmapped: 1\n\tclass: kitty\n\ttitle: nvim ~/src/hyprcircl/src/draw.rs\n\tinitialTitle: kitty\n' ;;
 esac

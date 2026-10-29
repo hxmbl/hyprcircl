@@ -76,8 +76,8 @@ pub fn resolved_config_path() -> PathBuf {
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("../hyprcircl.toml");
 
 /// Built-in geometry, also used for keys missing from a user's `[menu]`.
-pub const DEFAULT_INNER_RADIUS: f64 = 64.0;
-pub const DEFAULT_OUTER_RADIUS: f64 = 164.0;
+pub const DEFAULT_INNER_RADIUS: f64 = 60.0;
+pub const DEFAULT_OUTER_RADIUS: f64 = 156.0;
 pub const DEFAULT_SUBMENU_WIDTH: f64 = 76.0;
 pub const DEFAULT_RING_GAP: f64 = 8.0;
 pub const DEFAULT_ITEM_GAP: f64 = 6.0;
@@ -235,6 +235,10 @@ pub struct BarModule {
     /// E.g. `pactl subscribe | ...` or reading the Hyprland event socket.
     #[serde(default)]
     pub stream_command: String,
+    /// Longest output shown, in characters; longer text is cut and ends in
+    /// "…" (Waybar `max-length`). 0 = no limit.
+    #[serde(default)]
+    pub max_length: usize,
     /// File paths whose changes re-run `command` before its interval elapses.
     /// Watched files are read cheaply every ~100ms (works with sysfs), so
     /// file-backed modules like brightness/battery update instantly without
@@ -263,6 +267,7 @@ impl Default for BarModule {
             format: default_format(),
             icon: String::new(),
             stream_command: String::new(),
+            max_length: 0,
             watch: Vec::new(),
             on_click: String::new(),
             on_click_right: String::new(),
@@ -497,6 +502,7 @@ const KNOWN_MODULE: &[&str] = &[
     "format",
     "icon",
     "stream_command",
+    "max_length",
     "watch",
     "on_click",
     "on_click_right",
@@ -761,6 +767,11 @@ mod tests {
         let cfg = RadialConfig::default();
         assert!(cfg.inner_radius > 0.0);
         assert!(cfg.outer_radius > cfg.inner_radius);
+        // The DEFAULT_* constants (used for keys a file leaves out) match
+        // the shipped file, so a partial config looks like the shipped one.
+        assert_eq!(cfg.inner_radius, DEFAULT_INNER_RADIUS);
+        assert_eq!(cfg.outer_radius, DEFAULT_OUTER_RADIUS);
+        assert_eq!(cfg.animation_ms, DEFAULT_ANIMATION_MS);
         assert_eq!(cfg.ring_thickness, DEFAULT_SUBMENU_WIDTH);
         assert_eq!(cfg.ring_gap, DEFAULT_RING_GAP);
         assert_eq!(cfg.item_gap, DEFAULT_ITEM_GAP);
@@ -769,7 +780,9 @@ mod tests {
         // The built-in default is the shipped file, item for item.
         assert_eq!(cfg.items.len(), 8);
         assert_eq!(cfg.items[0].label, "Terminal");
-        assert_eq!(cfg.top_bar.modules.len(), 4);
+        // Workspace, window title, clock, network, volume, battery.
+        assert_eq!(cfg.top_bar.modules.len(), 6);
+        assert_eq!(cfg.top_bar.modules[1].max_length, 28);
         assert!(cfg.show_labels);
         assert!(!cfg.notify_only);
         assert!(!cfg.items.is_empty());

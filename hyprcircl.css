@@ -107,6 +107,7 @@
    padding        space between the pill's edge and the text
    margin-top     distance between the ring and the pill
    --module-gap   space between modules
+   --separator-color  hairline between modules (transparent hides it)
    ------------------------------------------------------------------------ */
 
 .pill {
@@ -122,4 +123,5 @@
     margin-top: 16px;
     border-radius: 17px;
     --module-gap: 18px;
+    --separator-color: rgba(202, 211, 245, 0.16);
 }
