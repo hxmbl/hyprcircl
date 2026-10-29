@@ -1120,8 +1120,10 @@ mod tests {
         assert!(approx(t.backdrop, (1.0, 0.0, 0.0, 0.5)));
         let t = Theme::from_css(".backdrop { background-color: transparent; }");
         assert_eq!(t.backdrop.3, 0.0);
-        let mut expected = Theme::default();
-        expected.backdrop = t.backdrop;
+        let expected = Theme {
+            backdrop: t.backdrop,
+            ..Default::default()
+        };
         assert_eq!(t, expected);
     }
 

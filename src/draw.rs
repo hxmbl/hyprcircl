@@ -117,6 +117,7 @@ pub fn pango_weight(w: i32) -> pango::Weight {
 
 /// ===== RADIAL MENU =====
 /// Draws one annular (donut-wedge) sector with rounded corners on all 4 corners.
+#[cfg(test)]
 pub fn draw_rounded_sector(
     cr: &cairo::Context,
     cx: f64,
