@@ -34,9 +34,6 @@ pub struct Theme {
     /// Full-screen tint behind the menu (`.backdrop` or `window`
     /// `{ background-color }`); transparent disables it.
     pub backdrop: Rgba,
-    /// Full-screen tint behind the menu (`.backdrop` or `window`
-    /// `{ background-color }`); transparent disables it.
-    pub backdrop: Rgba,
     /// Top pill (Waybar-style bar) background / text.
     pub pill_bg: Rgba,
     pub pill_fg: Rgba,
@@ -587,13 +584,6 @@ fn apply_decl(theme: &mut Theme, target: &Target, prop: &str, vals: &[Tok]) {
             }
             _ => {}
         },
-        (Element::Backdrop, _) => {
-            if prop == "background-color" || prop == "background" {
-                if let Some(c) = color {
-                    theme.backdrop = c;
-                }
-            }
-        }
         (Element::Backdrop, _) => {
             if prop == "background-color" || prop == "background" {
                 if let Some(c) = color {
