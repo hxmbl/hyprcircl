@@ -347,7 +347,8 @@ def main():
               "daemon: loaded hyprcircl.toml from $XDG_CONFIG_HOME/hyprcircl")
         check(f"[CSS] Loading {os.path.join(xdg_dir, 'hyprcircl.css')}" in log,
               "daemon: loaded hyprcircl.css from $XDG_CONFIG_HOME/hyprcircl")
-        check("[THEME] Reloaded" in log, "daemon: an edit to hyprcircl.css reloads live")
+        # The watcher logs one reload when it starts and one per edit.
+        check(log.count("[THEME] Reloaded") >= 2, "daemon: an edit to hyprcircl.css reloads live")
         shutil.rmtree(run, ignore_errors=True)
     else:
         print("skip daemon checks: sway not installed")
